@@ -1,0 +1,32 @@
+Job started on Wed Dec 10 05:21:41 PM EST 2025
+Running on node: della-i21g1
+Job ID: 2886496
+Working directory: /scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train
+Activated virtual environment
+Wed Dec 10 17:21:41 2025       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.105.08             Driver Version: 580.105.08     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H200                    On  |   00000000:9B:00.0 Off |                    0 |
+| N/A   33C    P0             76W /  700W |       0MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+==========================================
+GSM8K Generation-Only Evaluation
+Model: Qwen/Qwen3-4B-Instruct-2507
+Data: GSM8K validation set
+Backend: vLLM
+GPUs: 1
+==========================================

@@ -267,6 +267,9 @@ def dump_per_dataset_eval_results(
                     "env_class": concat_all_envs[i],
                     "env_extras": concat_env_extras[i],
                     "data_source": data_source,
+                    "prompt_token_ids": concat_generator_outputs["prompt_token_ids"][i],
+                    "response_ids": concat_generator_outputs["response_ids"][i],
+                    "loss_mask": concat_generator_outputs["loss_masks"][i],
                 }
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 

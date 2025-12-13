@@ -16,6 +16,7 @@
 # limitations under the License.
 
 import dataclasses
+import signal
 from enum import Enum
 from functools import partial
 from pathlib import Path
@@ -23,6 +24,23 @@ from typing import Any, Dict, List, Union
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 import pprint
+
+
+def _timeout_handler(signum, frame):
+    raise TimeoutError("wandb.finish() timed out")
+
+
+def _wandb_finish_with_timeout(wandb_instance, timeout_seconds: int = 60):
+    """Call wandb.finish() with a timeout to prevent hanging."""
+    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(timeout_seconds)
+    try:
+        wandb_instance.finish(exit_code=0)
+    except TimeoutError:
+        logger.warning(f"wandb.finish() timed out after {timeout_seconds}s, continuing anyway")
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 # TODO(tgriggs): Test all backends.
@@ -87,7 +105,7 @@ class Tracking:
         # TODO (sumanthrh): Check if this is really needed. Trackers like wandb will automatically finish at program exit.
         try:
             if "wandb" in self.logger:
-                self.logger["wandb"].finish(exit_code=0)
+                _wandb_finish_with_timeout(self.logger["wandb"], timeout_seconds=60)
             if "swanlab" in self.logger:
                 self.logger["swanlab"].finish()
             if "tensorboard" in self.logger:

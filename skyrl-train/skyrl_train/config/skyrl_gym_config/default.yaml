@@ -14,3 +14,11 @@ search:
   search_url: "http://127.0.0.1:8000/retrieve"
   topk: 3
   timeout: 30
+
+searchr1embeddings:
+  chroma_path: null  # Path to ChromaDB persistent storage (required)
+  collection_name: "wiki_embeddings"
+  topk: 3
+  log_requests: true
+  embedding_model: "gemini-embedding-001"
+  embedding_dim: 768

@@ -1,0 +1,7 @@
+Could not override 'environment.chroma_path'.
+To append to your config use +environment.chroma_path=/scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train/data/searchr1/chroma_db/tmp/tianyi/tool_caches/local_chroma/chroma_db
+Key 'chroma_path' is not in struct
+    full_key: environment.chroma_path
+    object_type=dict
+
+Set the environment variable HYDRA_FULL_ERROR=1 for a complete stack trace.

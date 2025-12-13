@@ -3,6 +3,7 @@ Main entrypoint for evaluation-only.
 """
 
 import asyncio
+import os
 
 import hydra
 import ray
@@ -37,6 +38,8 @@ class EvalOnlyEntrypoint(BasePPOExp):
         else:
             inference_engines = create_remote_inference_engines_from_config(self.cfg, tokenizer)
 
+        tracker = self.get_tracker()
+
         inference_engine_client = InferenceEngineClient(inference_engines, tokenizer, self.cfg)
         await inference_engine_client.wake_up()
         generator = self.get_generator(self.cfg, tokenizer, inference_engine_client)
@@ -49,8 +52,9 @@ class EvalOnlyEntrypoint(BasePPOExp):
             tokenizer=self.tokenizer,
         )
 
-        tracker = self.get_tracker()
+        logger.info(f"Logging eval results to tracker: {results}")
         tracker.log(results, step=0, commit=True)
+        logger.info(f"Done with logging")
 
         return results
 

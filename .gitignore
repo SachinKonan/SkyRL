@@ -45,3 +45,11 @@ docs/_spelling/
 
 # uv lock files
 uv.lock
+.idea/
+
+# generated stuff
+skyrl-train/data/
+skyrl-train/exports/
+
+numactl-2.0.16.tar.gz
+numactl-2.0.16/

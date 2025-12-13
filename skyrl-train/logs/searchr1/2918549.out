@@ -1,0 +1,80 @@
+Job started on Fri Dec 12 12:38:30 AM EST 2025
+Running on node: della-i20g2
+Job ID: 2918549
+Working directory: /scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train
+Activated virtual environment
+Fri Dec 12 00:38:30 2025       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.105.08             Driver Version: 580.105.08     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H200                    On  |   00000000:3B:00.0 Off |                    0 |
+| N/A   33C    P0             76W /  700W |       0MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+===========================================
+SearchR1 Generation-Only Evaluation
+Model: Qwen/Qwen3-4B-Instruct-2507
+Backend: vLLM
+GPUs: 1
+===========================================
+Starting retrieval server...
+Retrieval server started (PID: 2582875)
+Waiting for retrieval server to start...
+Checking server health...
+Waiting for server (attempt 1/10)...
+Waiting for server (attempt 2/10)...
+Waiting for server (attempt 3/10)...
+Waiting for server (attempt 4/10)...
+Waiting for server (attempt 5/10)...
+Waiting for server (attempt 6/10)...
+Waiting for server (attempt 7/10)...
+Waiting for server (attempt 8/10)...
+Waiting for server (attempt 9/10)...
+ERROR: Retrieval server failed to start
+Server logs:
+INFO:__main__:Initializing ChromaDB from /scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train/data/searchr1/chroma_db/tmp/tianyi/tool_caches/local_chroma/chroma_db
+INFO:chromadb.telemetry.product.posthog:Anonymized telemetry enabled. See                     https://docs.trychroma.com/telemetry for more information.
+INFO:__main__:Available collections: ['wiki_embeddings']
+INFO:__main__:Loaded collection 'wiki_embeddings'
+INFO:__main__:Initializing Gemini client
+INFO:__main__:Gemini client initialized
+INFO:__main__:Starting server on 0.0.0.0:9090
+ * Serving Flask app 'retrieval_server'
+ * Debug mode: off
+INFO:werkzeug:[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:9090
+ * Running on http://127.0.0.1:9090
+INFO:werkzeug:[33mPress CTRL+C to quit[0m
+WARNING:urllib3.connectionpool:Retrying (Retry(total=1, connect=2, read=2, redirect=None, status=None)) after connection broken by 'OSError('Tunnel connection failed: 403 Forbidden')': /batch/
+WARNING:urllib3.connectionpool:Retrying (Retry(total=0, connect=2, read=2, redirect=None, status=None)) after connection broken by 'OSError('Tunnel connection failed: 403 Forbidden')': /batch/
+INFO:backoff:Backing off send_request(...) for 0.3s (requests.exceptions.ProxyError: HTTPSConnectionPool(host='us.i.posthog.com', port=443): Max retries exceeded with url: /batch/ (Caused by ProxyError('Unable to connect to proxy', OSError('Tunnel connection failed: 403 Forbidden'))))
+WARNING:urllib3.connectionpool:Retrying (Retry(total=1, connect=2, read=2, redirect=None, status=None)) after connection broken by 'OSError('Tunnel connection failed: 403 Forbidden')': /batch/
+WARNING:urllib3.connectionpool:Retrying (Retry(total=0, connect=2, read=2, redirect=None, status=None)) after connection broken by 'OSError('Tunnel connection failed: 403 Forbidden')': /batch/
+INFO:backoff:Backing off send_request(...) for 0.3s (requests.exceptions.ProxyError: HTTPSConnectionPool(host='us.i.posthog.com', port=443): Max retries exceeded with url: /batch/ (Caused by ProxyError('Unable to connect to proxy', OSError('Tunnel connection failed: 403 Forbidden'))))
+WARNING:urllib3.connectionpool:Retrying (Retry(total=1, connect=2, read=2, redirect=None, status=None)) after connection broken by 'OSError('Tunnel connection failed: 403 Forbidden')': /batch/
+WARNING:urllib3.connectionpool:Retrying (Retry(total=0, connect=2, read=2, redirect=None, status=None)) after connection broken by 'OSError('Tunnel connection failed: 403 Forbidden')': /batch/
+INFO:backoff:Backing off send_request(...) for 2.4s (requests.exceptions.ProxyError: HTTPSConnectionPool(host='us.i.posthog.com', port=443): Max retries exceeded with url: /batch/ (Caused by ProxyError('Unable to connect to proxy', OSError('Tunnel connection failed: 403 Forbidden'))))
+WARNING:urllib3.connectionpool:Retrying (Retry(total=1, connect=2, read=2, redirect=None, status=None)) after connection broken by 'OSError('Tunnel connection failed: 403 Forbidden')': /batch/
+WARNING:urllib3.connectionpool:Retrying (Retry(total=0, connect=2, read=2, redirect=None, status=None)) after connection broken by 'OSError('Tunnel connection failed: 403 Forbidden')': /batch/
+ERROR:backoff:Giving up send_request(...) after 4 tries (requests.exceptions.ProxyError: HTTPSConnectionPool(host='us.i.posthog.com', port=443): Max retries exceeded with url: /batch/ (Caused by ProxyError('Unable to connect to proxy', OSError('Tunnel connection failed: 403 Forbidden'))))
+
+===========================================
+Cleaning up...
+===========================================
+Killing retrieval server (PID: 2582875)
+Retrieval server stopped
+Completed at: Fri Dec 12 12:40:30 AM EST 2025
+===========================================

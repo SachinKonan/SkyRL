@@ -1,0 +1,13 @@
+Http proxy settings allow access to a very limited and pre-approved list of internet API servers.
+This is documented on Research Computing website. General internet access is not supported.
+warning: The `extra-build-dependencies` option is experimental and may change without warning. Pass `--preview-features extra-build-dependencies` to disable this warning.
+Installed 199 packages in 8.98s
+Error executing job with overrides: ["data.val_data=['/scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train/data/gsm8k/validation.parquet']", 'trainer.policy.model.path=/scratch/gpfs/ZHUANGL/sk7524/hf/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554', 'trainer.logger=wandb', 'trainer.project_name=gsm8k', 'trainer.run_name=gsm8k_gen_qwen3_4b_2884188', 'trainer.placement.colocate_all=false', 'trainer.export_path=/scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train/exports/gsm8k/2884188', 'trainer.dump_eval_results=true', 'generator.backend=vllm', 'generator.num_inference_engines=1', 'generator.inference_engine_tensor_parallel_size=1', 'generator.gpu_memory_utilization=0.9', 'generator.eval_sampling_params.max_generate_length=1024', 'generator.eval_sampling_params.temperature=0.7', 'environment.env_class=gsm8k']
+Traceback (most recent call last):
+  File "/scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train/skyrl_train/entrypoints/main_generate.py", line 66, in main
+    validate_generator_cfg(cfg)
+  File "/scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train/skyrl_train/utils/utils.py", line 357, in validate_generator_cfg
+    assert os.environ.get("WANDB_API_KEY"), "`WANDB_API_KEY` is required for `wandb` logger"
+AssertionError: `WANDB_API_KEY` is required for `wandb` logger
+
+Set the environment variable HYDRA_FULL_ERROR=1 for a complete stack trace.

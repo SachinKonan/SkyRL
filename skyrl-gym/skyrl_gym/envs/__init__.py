@@ -36,3 +36,8 @@ register(
     id="searchcode",
     entry_point="skyrl_gym.envs.searchcode.env:SearchCodeEnv",
 )
+
+register(
+    id="searchr1embeddings",
+    entry_point="skyrl_gym.envs.searchr1embeddings.env:SearchR1EmbeddingsEnv",
+)

@@ -1,0 +1,36 @@
+Job started on Fri Dec 12 01:42:11 PM EST 2025
+Running on node: della-i21g2
+Job ID: 2931825
+Working directory: /scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train
+Activated virtual environment
+Fri Dec 12 13:42:11 2025       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.105.08             Driver Version: 580.105.08     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H200                    On  |   00000000:DB:00.0 Off |                    0 |
+| N/A   30C    P0             76W /  700W |       0MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+===========================================
+SearchR1 Generation-Only Evaluation
+Model: Qwen/Qwen3-4B-Instruct-2507
+Backend: vLLM
+GPUs: 1
+===========================================
+===========================================
+Starting Generation (no server needed!)
+===========================================
+Generation failed
+End time: Fri Dec 12 01:42:29 PM EST 2025

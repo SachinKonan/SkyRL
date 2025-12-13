@@ -155,6 +155,12 @@ miniswe = [
     "mini-swe-agent>=1.12.0",
     "litellm",
 ]
+vector-search = [
+    "chromadb",
+    "google-genai",
+    "huggingface_hub",
+    "flask"
+]
 
 
 [[tool.uv.index]]
