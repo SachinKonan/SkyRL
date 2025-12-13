@@ -7,7 +7,7 @@ Uses OpenAI-compatible API with Gemini backend.
 import logging
 import os
 import time
-from typing import List
+from typing import List, Tuple
 
 from openai import OpenAI
 
@@ -28,7 +28,7 @@ def get_gemini_embedding_sync(
     embedding_dim: int = 768,
     max_retries: int = MAX_RETRIES,
     retry_delay: float = RETRY_DELAY,
-) -> List[List[float]]:
+) -> Tuple[List[List[float]], int]:
     """
     Get embeddings from Gemini API using OpenAI-compatible interface.
 
@@ -41,7 +41,9 @@ def get_gemini_embedding_sync(
         retry_delay: Initial delay between retries
 
     Returns:
-        List of embeddings (list of list of floats)
+        Tuple of (embeddings, retry_count) where:
+            - embeddings: List of embeddings (list of list of floats)
+            - retry_count: Number of retries needed (0 = success on first try)
 
     Raises:
         ValueError: If input validation fails
@@ -86,7 +88,7 @@ def get_gemini_embedding_sync(
             # Extract embeddings in order
             embeddings: List[List[float]] = [item.embedding for item in response.data]
 
-            return embeddings
+            return embeddings, attempt  # attempt = retry_count (0 = first try succeeded)
 
         except Exception as e:
             if attempt < max_retries - 1:

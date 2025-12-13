@@ -7,12 +7,13 @@ For details, see https://skyrl.readthedocs.io/en/latest/tutorials/skyrl_gym_gene
 
 import asyncio
 import copy
+import time
 from uuid import uuid4
 import skyrl_gym
 from typing import List, Dict, Any, Optional, Union, Tuple
 from concurrent.futures import ThreadPoolExecutor
 from tqdm.asyncio import tqdm
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from loguru import logger
 
 from skyrl_train.generators.base import GeneratorInterface, GeneratorInput, GeneratorOutput, TrajectoryID
@@ -39,6 +40,7 @@ class AgentLoopOutput:
     prompt_ids: List[int]
     rollout_logprobs: Optional[List[float]]
     env_metrics: Dict[str, Any]
+    steps: List[Dict[str, Any]] = field(default_factory=list)  # Per-step timing with token indices
 
 
 class SkyRLGymGenerator(GeneratorInterface):
@@ -185,6 +187,8 @@ class SkyRLGymGenerator(GeneratorInterface):
         rollout_logprobs = None
         # Accumulate per-step rewards. Format: (reward, response_end_token_idx)
         per_step_rewards: List[Tuple[float, Optional[int]]] = []
+        # Per-step timing: [{start_ix, end_ix, type, time_elapsed_s}, ...]
+        steps: List[Dict[str, Any]] = []
 
         while not done:
 
@@ -193,6 +197,10 @@ class SkyRLGymGenerator(GeneratorInterface):
                 break
 
             # 1. Generate output
+            # Track token index before generation (relative to response_ids, not input_ids)
+            model_start_ix = len(input_ids) - initial_prompt_length
+            llm_start_time = time.time()
+
             if retokenize_chat_history:
                 engine_input = InferenceEngineInput(
                     prompts=[chat_history], session_ids=[session_id], sampling_params=sampling_params
@@ -206,6 +214,8 @@ class SkyRLGymGenerator(GeneratorInterface):
             output = engine_output["responses"][0]
             output_ids = engine_output["response_ids"][0]
             stop_reason = engine_output["stop_reasons"][0]
+
+            llm_elapsed = time.time() - llm_start_time
 
             # Append eos when sampling_params.stop is not None. Does not affect 3.a as chat templates add eos_token.
             # sampling_params is not None for eval, but None for training (which uses engine.sampling_params which are from cfg)
@@ -224,7 +234,10 @@ class SkyRLGymGenerator(GeneratorInterface):
                     added_eos = True
 
             # 2. Environment step
+            env_start_time = time.time()
             env_step_output: BaseTextEnvStepOutput = await self._run_in_executor_if_available(env.step, output)
+            env_elapsed = time.time() - env_start_time
+
             new_obs = env_step_output["observations"]
             step_reward: float = env_step_output["reward"]
             done = env_step_output["done"]
@@ -262,6 +275,32 @@ class SkyRLGymGenerator(GeneratorInterface):
                     )
                 )
                 per_step_rewards.append((step_reward, response_end_idx))
+
+            # 4. Record step timing (token indices relative to response_ids)
+            # Model step: from start of this turn's generation to end of model output
+            model_end_ix = model_start_ix + len(output_ids)
+            steps.append({
+                "start_ix": model_start_ix,
+                "end_ix": model_end_ix,
+                "type": "model",
+                "time_elapsed_s": llm_elapsed,
+            })
+
+            # Env step: from end of model output to current position (includes observation tokens)
+            current_response_len = len(input_ids) - initial_prompt_length
+            if current_response_len > model_end_ix:
+                # Environment added observation tokens
+                env_step_entry = {
+                    "start_ix": model_end_ix,
+                    "end_ix": current_response_len,
+                    "type": "env",
+                    "time_elapsed_s": env_elapsed,
+                }
+                # Add env-specific metadata (e.g., gemini_retry_count for searchr1embeddings)
+                step_metadata = env_step_output.get("metadata", {})
+                if step_metadata.get("gemini_retry_count") is not None:
+                    env_step_entry["gemini_retry_count"] = step_metadata["gemini_retry_count"]
+                steps.append(env_step_entry)
 
         # Get environment-specific metrics after the episode is done
         env_metrics = env.get_metrics()
@@ -324,6 +363,7 @@ class SkyRLGymGenerator(GeneratorInterface):
             prompt_ids=prompt_ids,
             rollout_logprobs=rollout_logprobs,
             env_metrics=env_metrics,
+            steps=steps,
         )
 
     async def generate_batched(
@@ -360,7 +400,9 @@ class SkyRLGymGenerator(GeneratorInterface):
 
         # For single-turn generation, we can use text-in-token-out, since we do not need to re-tokenize.
         engine_input = InferenceEngineInput(prompts=init_prompts, sampling_params=sampling_params)
+        llm_start_time = time.time()
         engine_output = await self.inference_engine_client.generate(engine_input)
+        llm_elapsed = time.time() - llm_start_time
         responses = engine_output["responses"]
         all_response_ids = engine_output["response_ids"]
         stop_reasons = engine_output["stop_reasons"]
@@ -370,15 +412,26 @@ class SkyRLGymGenerator(GeneratorInterface):
         rewards = []
         loss_masks = []
         env_metrics = []
+        all_steps: List[List[Dict[str, Any]]] = []
         truncated_logprobs: Optional[List[List[float]]] = [] if logprobs is not None else None
 
         for i, (response, response_ids, env, env_class) in enumerate(
             zip(responses, all_response_ids, envs, env_classes)
         ):
             # step on environment and compute reward
+            env_start_time = time.time()
             env_step_output: BaseTextEnvStepOutput = await self._run_in_executor_if_available(env.step, response)
+            env_elapsed = time.time() - env_start_time
             reward = env_step_output["reward"]
             rewards.append(reward)
+
+            # Record step timing for single-turn (one model step, one env step)
+            traj_steps = [
+                {"start_ix": 0, "end_ix": len(response_ids), "type": "model", "time_elapsed_s": llm_elapsed / len(responses)},
+            ]
+            # Env step doesn't add tokens in single-turn, but record timing anyway
+            traj_steps.append({"start_ix": len(response_ids), "end_ix": len(response_ids), "type": "env", "time_elapsed_s": env_elapsed})
+            all_steps.append(traj_steps)
 
             if len(response_ids) > max_tokens:
                 response_ids = response_ids[:max_tokens]
@@ -398,7 +451,7 @@ class SkyRLGymGenerator(GeneratorInterface):
             add_generation_prompt=True,
             tokenize=True,
         )
-        rollout_metrics = get_rollout_metrics(responses, rewards, env_metrics, env_classes)
+        rollout_metrics = get_rollout_metrics(responses, rewards, env_metrics, env_classes, all_steps)
 
         if self.generator_cfg.apply_overlong_filtering:
             loss_masks = apply_overlong_filtering(loss_masks, responses, self.tokenizer.eos_token_id)
@@ -411,6 +464,7 @@ class SkyRLGymGenerator(GeneratorInterface):
             "stop_reasons": stop_reasons,
             "rollout_metrics": rollout_metrics,
             "rollout_logprobs": truncated_logprobs,
+            "steps": all_steps,
         }
 
         return generator_output
@@ -468,6 +522,7 @@ class SkyRLGymGenerator(GeneratorInterface):
         loss_masks = [output.loss_mask for output in all_outputs]
         prompt_token_ids = [output.prompt_ids for output in all_outputs]
         env_metrics = [output.env_metrics for output in all_outputs]
+        all_steps = [output.steps for output in all_outputs]
 
         if sampling_params is not None:
             # sampling params will be a dict in the format of the inference engine backend
@@ -481,7 +536,7 @@ class SkyRLGymGenerator(GeneratorInterface):
         else:
             rollout_logprobs = None
 
-        rollout_metrics = get_rollout_metrics(responses, rewards, env_metrics, env_classes)
+        rollout_metrics = get_rollout_metrics(responses, rewards, env_metrics, env_classes, all_steps)
 
         if self.generator_cfg.zero_reward_on_non_stop:
             # set reward to 0 if the stop reason is not "stop"
@@ -498,6 +553,7 @@ class SkyRLGymGenerator(GeneratorInterface):
             "stop_reasons": stop_reasons,
             "rollout_metrics": rollout_metrics,
             "rollout_logprobs": rollout_logprobs,
+            "steps": all_steps,
         }
 
         return generator_output

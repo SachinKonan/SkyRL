@@ -271,6 +271,9 @@ def dump_per_dataset_eval_results(
                     "response_ids": concat_generator_outputs["response_ids"][i],
                     "loss_mask": concat_generator_outputs["loss_masks"][i],
                 }
+                # Add per-step timing if available
+                if concat_generator_outputs.get("steps") is not None:
+                    entry["steps"] = concat_generator_outputs["steps"][i]
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
         logger.info(f"Dumped eval data for {data_source} to {filename}")

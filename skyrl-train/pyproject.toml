@@ -43,6 +43,7 @@ dependencies = [
     "s3fs",
     "fastapi",
     "uvicorn",
+    "matplotlib>=3.10.8",
 ]
 
 [tool.uv]

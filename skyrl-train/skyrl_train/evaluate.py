@@ -94,7 +94,11 @@ async def evaluate(
         }
     )
 
-    # 4. Prepare dumping data
+    # 4. Add rollout metrics (timing, histograms, etc.)
+    if concat_generator_outputs.get("rollout_metrics"):
+        eval_metrics.update(concat_generator_outputs["rollout_metrics"])
+
+    # 5. Prepare dumping data
     # TODO[Ben] update this to be cloud-compatible
     if cfg.trainer.dump_eval_results:
         with Timer("dump_eval_results"):

@@ -113,7 +113,7 @@ class SearchR1EmbeddingsEnv(BaseTextEnv):
 
             cls._initialized = True
 
-    def _search(self, query: str) -> str:
+    def _search(self, query: str) -> tuple[str, int]:
         """
         Perform search using embedded ChromaDB + Gemini REST API.
 
@@ -121,10 +121,10 @@ class SearchR1EmbeddingsEnv(BaseTextEnv):
             query: Search query string
 
         Returns:
-            Formatted search results as string
+            Tuple of (formatted search results, gemini_retry_count)
         """
         if not query or not query.strip():
-            return "Error: Empty query provided"
+            return "Error: Empty query provided", 0
 
         with self._semaphore:
             try:
@@ -132,7 +132,7 @@ class SearchR1EmbeddingsEnv(BaseTextEnv):
                     logger.info(f"Processing search query: {query[:100]}...")
 
                 # Get embedding from Gemini REST API
-                embeddings = get_gemini_embedding_sync([query.strip()])
+                embeddings, gemini_retry_count = get_gemini_embedding_sync([query.strip()])
 
                 # Query ChromaDB with retry logic
                 results = self._query_chroma_with_retry(embeddings, n_results=self.topk)
@@ -141,13 +141,13 @@ class SearchR1EmbeddingsEnv(BaseTextEnv):
                 formatted = self._format_results(results, query)
 
                 if self.log_requests:
-                    logger.info(f"Returning {len(results.get('documents', [[]])[0])} results")
+                    logger.info(f"Returning {len(results.get('documents', [[]])[0])} results (retries={gemini_retry_count})")
 
-                return formatted
+                return formatted, gemini_retry_count
 
             except Exception as e:
                 logger.error(f"Search error: {e}")
-                return f"Error during search: {str(e)}"
+                return f"Error during search: {str(e)}", 0
 
     def _query_chroma_with_retry(
         self,
@@ -235,6 +235,7 @@ class SearchR1EmbeddingsEnv(BaseTextEnv):
         error = None
         done = self._is_done(action)
         reward = self._get_reward(action, done)
+        gemini_retry_count = 0
 
         if done:
             return BaseTextEnvStepOutput(observations=[], reward=reward, done=done, metadata={})
@@ -245,7 +246,7 @@ class SearchR1EmbeddingsEnv(BaseTextEnv):
 
         if query:
             try:
-                search_result = self._search(query)
+                search_result, gemini_retry_count = self._search(query)
                 observation = "\n<information>" + search_result + "</information>\n"
             except Exception as e:
                 error = str(e)
@@ -265,6 +266,7 @@ class SearchR1EmbeddingsEnv(BaseTextEnv):
         info = {
             "tool_name": "search",
             "tool_input": query,
+            "gemini_retry_count": gemini_retry_count,
         }
 
         # Update chat history

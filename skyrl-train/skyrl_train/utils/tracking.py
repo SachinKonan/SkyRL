@@ -94,9 +94,18 @@ class Tracking:
     def log(self, data, step, commit=False):
         for logger_name, logger_instance in self.logger.items():
             if logger_name == "wandb":
-                logger_instance.log(data=data, step=step, commit=commit)
+                # Convert histogram lists to wandb.Histogram objects
+                processed_data = {}
+                for key, value in data.items():
+                    if key.endswith("_histogram") and isinstance(value, list):
+                        processed_data[key] = logger_instance.Histogram(value)
+                    else:
+                        processed_data[key] = value
+                logger_instance.log(data=processed_data, step=step, commit=commit)
             else:
-                logger_instance.log(data=data, step=step)
+                # For non-wandb loggers, skip histogram data (lists)
+                filtered_data = {k: v for k, v in data.items() if not k.endswith("_histogram")}
+                logger_instance.log(data=filtered_data, step=step)
 
     def __del__(self):
         # NOTE (sumanthrh): We use a try-except block here while finishing tracking.

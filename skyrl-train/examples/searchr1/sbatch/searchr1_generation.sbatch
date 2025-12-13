@@ -86,6 +86,7 @@ python -m skyrl_train.entrypoints.main_generate \
   generator.max_turns=4 \
   generator.eval_n_samples_per_prompt=10 \
   environment.env_class=searchr1embeddings \
+  environment.skyrl_gym.max_env_workers=128 \
   environment.skyrl_gym.searchr1embeddings.chroma_path="$CHROMA_PATH" \
   environment.skyrl_gym.searchr1embeddings.collection_name="wiki_embeddings" \
   environment.skyrl_gym.searchr1embeddings.topk=3 \

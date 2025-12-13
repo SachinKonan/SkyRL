@@ -41,6 +41,8 @@ class GeneratorOutput(TypedDict):
     trajectory_ids: Optional[List[TrajectoryID]]
     # Applicable only for step-wise training
     is_last_step: Optional[List[bool]]
+    # Per-step timing with token indices: [{start_ix, end_ix, type, time_elapsed_s}, ...]
+    steps: Optional[List[List[Dict[str, Any]]]]
 
 
 class GeneratorInterface(ABC):

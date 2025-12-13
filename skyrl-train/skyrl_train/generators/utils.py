@@ -197,8 +197,9 @@ def concatenate_generator_outputs(generator_outputs: List[GeneratorOutput]) -> G
     for key in additional_keys:
         result[key] = sum([generator_output[key] for generator_output in generator_outputs], [])
 
-    # Re-aggregate rollout metrics
-    rollout_metrics = get_rollout_metrics(result["response_ids"], result["rewards"])
+    # Re-aggregate rollout metrics (include steps if available)
+    all_steps = result.get("steps", None)
+    rollout_metrics = get_rollout_metrics(result["response_ids"], result["rewards"], all_steps=all_steps)
     result["rollout_metrics"] = rollout_metrics
 
     # Validate the generator output using the number of prompts
@@ -235,6 +236,7 @@ def get_rollout_metrics(
     rewards: Union[List[float], List[List[float]]],
     env_metrics: Optional[List[Dict[str, Any]]] = None,
     env_classes: Optional[List[str]] = None,
+    all_steps: Optional[List[List[Dict[str, Any]]]] = None,
 ):
     """
     Computes rollout metrics including token statistics and optional environment-specific metrics.
@@ -244,6 +246,7 @@ def get_rollout_metrics(
         rewards: List of rewards (either per-trajectory or per-token)
         env_metrics: Optional list of environment-specific metrics for each trajectory
         env_classes: Optional list of environment class names for each trajectory
+        all_steps: Optional list of per-step timing data for each trajectory
 
     Returns:
         Dictionary of aggregated metrics
@@ -284,6 +287,36 @@ def get_rollout_metrics(
             agg = aggregate_for_environment(env_name, metrics)
             for key, value in agg.items():
                 rollout_metrics[f"environment/{key}"] = value
+
+    # Aggregate timing metrics from steps
+    if all_steps is not None:
+        all_llm_times = []
+        all_env_times = []
+        all_retry_counts = []
+        for traj_steps in all_steps:
+            for step in traj_steps:
+                if step["type"] == "model":
+                    all_llm_times.append(step["time_elapsed_s"])
+                elif step["type"] == "env":
+                    all_env_times.append(step["time_elapsed_s"])
+                    # Collect retry counts if available
+                    if "gemini_retry_count" in step:
+                        all_retry_counts.append(step["gemini_retry_count"])
+
+        if all_llm_times:
+            rollout_metrics["timing/avg_llm_response_time"] = float(np.mean(all_llm_times))
+            rollout_metrics["timing/max_llm_response_time"] = float(np.max(all_llm_times))
+        if all_env_times:
+            rollout_metrics["timing/avg_env_response_time"] = float(np.mean(all_env_times))
+            rollout_metrics["timing/max_env_response_time"] = float(np.max(all_env_times))
+            # Store raw env times for histogram (wandb.Histogram)
+            rollout_metrics["timing/env_response_times_histogram"] = all_env_times
+        if all_retry_counts:
+            rollout_metrics["timing/avg_gemini_retries"] = float(np.mean(all_retry_counts))
+            rollout_metrics["timing/max_gemini_retries"] = int(np.max(all_retry_counts))
+            rollout_metrics["timing/total_gemini_retries"] = int(np.sum(all_retry_counts))
+            # Store raw retry counts for histogram (wandb.Histogram)
+            rollout_metrics["timing/gemini_retries_histogram"] = all_retry_counts
 
     return rollout_metrics
 
