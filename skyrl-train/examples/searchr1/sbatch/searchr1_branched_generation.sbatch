@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=searchr1_gen_qwen3_4b
+#SBATCH --job-name=searchr1_branched_gen
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=20
 #SBATCH --mem=200G
 #SBATCH --gres=gpu:1
 #SBATCH --partition=ailab
-#SBATCH --time=02:00:00
+#SBATCH --time=04:00:00
 #SBATCH --output=logs/searchr1/%j.out
 #SBATCH --error=logs/searchr1/%j.err
 
@@ -46,31 +46,41 @@ mkdir -p logs/searchr1
 nvidia-smi
 
 echo "==========================================="
-echo "SearchR1 Generation-Only Evaluation"
+echo "SearchR1 BRANCHED Generation Evaluation"
 echo "Model: Qwen/Qwen3-4B-Instruct-2507"
 echo "Backend: vLLM"
 echo "GPUs: 1"
+echo "Branching: src_trajectories=6, group_size=10"
 echo "==========================================="
 
 # Paths
 MODEL_PATH="/scratch/gpfs/ZHUANGL/sk7524/hf/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554"
 DATA_DIR="/scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train/data/searchr1"
-EXPORT_PATH="/scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train/exports/searchr1/${SLURM_JOB_ID}"
+EXPORT_PATH="/scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train/exports/searchr1_branched/${SLURM_JOB_ID}"
 CHROMA_PATH="/scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train/data/searchr1/chroma_db/tmp/tianyi/tool_caches/local_chroma/chroma_db"
 
 echo "==========================================="
-echo "Starting Generation (no server needed!)"
+echo "Starting Branched Generation"
 echo "==========================================="
 
-# Run generation-only evaluation
-# ChromaDB and Gemini clients are embedded in the environment
-# NOTE: Config uses environment.skyrl_gym.<env_class>.<param> pattern
+# Run branched generation evaluation
+# Branching config:
+#   - eval_n_samples_per_prompt=10 (group_size)
+#   - branching.src_trajectories=6 (start with 6 root trajectories)
+#   - branching.num_branches=2 (spawn 2 branches per completed trajectory)
+#
+# Trajectory metadata will be saved including:
+#   - trajectory_id: unique identifier
+#   - is_branched: whether this is a branched trajectory
+#   - source_repetition_id: which trajectory we branched from
+#   - branch_turn: which turn we branched from
+#   - branch_token_idx: token index where we branched
 python -m skyrl_train.entrypoints.main_generate \
-  data.val_data="['$DATA_DIR/parquets/validation.parquet']" \
+  data.val_data="['$DATA_DIR/validation.parquet']" \
   trainer.policy.model.path="$MODEL_PATH" \
   trainer.logger="wandb" \
   trainer.project_name="searchr1" \
-  trainer.run_name="searchr1_gen_qwen3_4b_${SLURM_JOB_ID}" \
+  trainer.run_name="searchr1_branched_gen_${SLURM_JOB_ID}" \
   trainer.placement.colocate_all=false \
   trainer.export_path="$EXPORT_PATH" \
   trainer.dump_eval_results=true \
@@ -86,6 +96,9 @@ python -m skyrl_train.entrypoints.main_generate \
   generator.append_eos_token_after_stop_str_in_multi_turn=true \
   generator.max_turns=4 \
   generator.eval_n_samples_per_prompt=10 \
+  generator.branching.enabled=true \
+  generator.branching.src_trajectories=6 \
+  generator.branching.num_branches=2 \
   environment.env_class=searchr1embeddings \
   environment.skyrl_gym.max_env_workers=128 \
   environment.skyrl_gym.searchr1embeddings.chroma_path="$CHROMA_PATH" \
@@ -95,9 +108,17 @@ python -m skyrl_train.entrypoints.main_generate \
   "$@"
 
 if [ $? -eq 0 ]; then
-    echo "Generation completed successfully"
+    echo "Branched generation completed successfully"
+    echo "Results saved to: $EXPORT_PATH"
+    echo ""
+    echo "Output files include trajectory metadata:"
+    echo "  - trajectory_id: unique identifier (e.g., uid_0_from_1_t0_tok15)"
+    echo "  - is_branched: true if this is a branched trajectory"
+    echo "  - source_repetition_id: parent trajectory's repetition_id"
+    echo "  - branch_turn: which turn we branched from (0-indexed)"
+    echo "  - branch_token_idx: token index within response where branch occurred"
 else
-    echo "Generation failed"
+    echo "Branched generation failed"
 fi
 
 echo "End time: $(date)"

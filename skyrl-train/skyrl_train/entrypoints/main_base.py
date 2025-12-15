@@ -207,6 +207,18 @@ class BasePPOExp:
                 model_name=cfg.trainer.policy.model.path,
             )
 
+        # Use BranchedSkyRLGymGenerator when branching is enabled
+        if getattr(cfg.generator, "branching", None) and cfg.generator.branching.get("enabled", False):
+            from skyrl_train.generators.branched_skyrl_gym_generator import BranchedSkyRLGymGenerator
+
+            return BranchedSkyRLGymGenerator(
+                generator_cfg=cfg.generator,
+                skyrl_gym_cfg=cfg.environment.skyrl_gym,
+                inference_engine_client=inference_engine_client,
+                tokenizer=tokenizer,
+                model_name=cfg.trainer.policy.model.path,
+            )
+
         return SkyRLGymGenerator(
             generator_cfg=cfg.generator,
             skyrl_gym_cfg=cfg.environment.skyrl_gym,

@@ -73,11 +73,13 @@ def get_gemini_embedding_sync(
     # Retry logic with exponential backoff
     for attempt in range(max_retries):
         try:
+            start_time = time.time()
             response = client.embeddings.create(
                 input=texts,
                 model=model,
                 dimensions=embedding_dim,
             )
+            elapsed_ms = (time.time() - start_time) * 1000
 
             if not response.data:
                 raise ValueError("No embeddings returned from Gemini API")
@@ -87,6 +89,8 @@ def get_gemini_embedding_sync(
 
             # Extract embeddings in order
             embeddings: List[List[float]] = [item.embedding for item in response.data]
+
+            logger.info(f"Gemini embedding took {elapsed_ms:.1f}ms for {len(texts)} texts")
 
             return embeddings, attempt  # attempt = retry_count (0 = first try succeeded)
 

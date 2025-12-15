@@ -16,6 +16,29 @@ class TrajectoryID:
 
 
 @dataclass
+class BranchedTrajectoryID(TrajectoryID):
+    """Extended TrajectoryID for branched trajectories.
+
+    Tracks the lineage of a branched trajectory back to its source.
+    For root trajectories, source_repetition_id is None.
+    """
+
+    source_repetition_id: Optional[int] = None  # Parent's repetition_id (None for root)
+    branch_turn: Optional[int] = None  # Which turn we branched from (0-indexed)
+    branch_token_idx: Optional[int] = None  # Token index within response_ids where branch occurred
+
+    def to_string(self) -> str:
+        base = f"{self.instance_id}_{self.repetition_id}"
+        if self.source_repetition_id is not None:
+            return f"{base}_from_{self.source_repetition_id}_t{self.branch_turn}_tok{self.branch_token_idx}"
+        return base
+
+    def is_root(self) -> bool:
+        """Returns True if this is a root trajectory (not branched)."""
+        return self.source_repetition_id is None
+
+
+@dataclass
 class BatchMetadata:
     global_step: int
     training_phase: TrainingPhase

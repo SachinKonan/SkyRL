@@ -290,6 +290,14 @@ generator:
   # EOS token), this masks out every token in the loss mask.
   apply_overlong_filtering: false
 
+  # Branching configuration for progressive rollouts
+  # When enabled, starts with fewer root trajectories and branches from completed ones
+  # until reaching n_samples_per_prompt trajectories per UID
+  branching:
+    enabled: false  # Set to true to use branched rollouts
+    src_trajectories: 2  # Number of root trajectories to start with (< n_samples_per_prompt)
+    num_branches: 2  # Number of branches to spawn per completed trajectory
+
   # rope parameters, can be optionally different from the trainer , useful in some cases like with thinking models.
   rope_scaling: ${trainer.rope_scaling}
   rope_theta: ${trainer.rope_theta}

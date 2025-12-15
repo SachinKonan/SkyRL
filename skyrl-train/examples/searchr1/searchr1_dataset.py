@@ -12,6 +12,7 @@ import os
 from typing import Any
 
 import datasets
+import pandas as pd
 
 
 # System prompt for Search-R1 tasks
@@ -94,9 +95,13 @@ def process_fn(example: dict, idx: int, data_source: str) -> dict:
 
 
 if __name__ == "__main__":
+    import pandas as pd
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_dir", default="data/searchr1")
     parser.add_argument("--dataset_name", default="PeterJinGo/nq_hotpotqa_train")
+    parser.add_argument("--parquet_dir", default="/scratch/gpfs/ZHUANGL/sk7524/hf/hub/datasets--PeterJinGo--nq_hotpotqa_train/snapshots/b7d80abfee334a7a91cb377544f09180d58b34f6",
+                        help="Directory with pre-downloaded parquet files")
     parser.add_argument("--max_train_samples", type=int, default=None, help="Max training samples (for testing)")
     parser.add_argument("--max_val_samples", type=int, default=None, help="Max validation samples (for testing)")
     parser.add_argument("--seed", type=int, default=42)
@@ -105,34 +110,25 @@ if __name__ == "__main__":
     args.output_dir = os.path.expanduser(args.output_dir)
     os.makedirs(args.output_dir, exist_ok=True)
 
-    print(f"Loading dataset: {args.dataset_name}")
+    # Load from pre-downloaded parquet files (avoids HF datasets schema issues)
+    print(f"Loading from parquet files in: {args.parquet_dir}")
+    train_df = pd.read_parquet(os.path.join(args.parquet_dir, "train.parquet"))
+    test_df = pd.read_parquet(os.path.join(args.parquet_dir, "test.parquet"))
+    print(f"Loaded train: {len(train_df)}, test: {len(test_df)}")
 
-    try:
-        # Try loading with train/test splits
-        train_dataset = datasets.load_dataset(args.dataset_name, split="train")
-        test_dataset = datasets.load_dataset(args.dataset_name, split="test")
-        print(f"Loaded train: {len(train_dataset)}, test: {len(test_dataset)}")
-    except Exception as e:
-        print(f"Could not load with splits, trying without: {e}")
-        # Try loading without splits
-        full_dataset = datasets.load_dataset(args.dataset_name)
-        if "train" in full_dataset:
-            train_dataset = full_dataset["train"]
-            test_dataset = full_dataset.get("test", full_dataset.get("validation", None))
-        else:
-            # Just use all data as train
-            train_dataset = full_dataset
-            test_dataset = None
+    # Shuffle
+    train_df = train_df.sample(frac=1, random_state=args.seed).reset_index(drop=True)
+    test_df = test_df.sample(frac=1, random_state=args.seed).reset_index(drop=True)
 
-    # Shuffle and limit samples if requested
-    train_dataset = train_dataset.shuffle(seed=args.seed)
+    # Limit samples if requested
     if args.max_train_samples:
-        train_dataset = train_dataset.select(range(min(args.max_train_samples, len(train_dataset))))
+        train_df = train_df.head(args.max_train_samples)
+    if args.max_val_samples:
+        test_df = test_df.head(args.max_val_samples)
 
-    if test_dataset:
-        test_dataset = test_dataset.shuffle(seed=args.seed)
-        if args.max_val_samples:
-            test_dataset = test_dataset.select(range(min(args.max_val_samples, len(test_dataset))))
+    # Convert to list of dicts
+    train_dataset = train_df.to_dict("records")
+    test_dataset = test_df.to_dict("records")
 
     # Print sample
     print("\nSample from train dataset:")
@@ -149,23 +145,14 @@ if __name__ == "__main__":
     print(f"Saved train.parquet ({len(train_ds)} examples)")
 
     # Process validation/test data
-    if test_dataset:
-        print(f"Processing {len(test_dataset)} validation examples...")
-        val_processed = [
-            process_fn(example, idx, args.dataset_name)
-            for idx, example in enumerate(test_dataset)
-        ]
-        val_ds = datasets.Dataset.from_list(val_processed)
-        val_ds.to_parquet(os.path.join(args.output_dir, "validation.parquet"))
-        print(f"Saved validation.parquet ({len(val_ds)} examples)")
-    else:
-        # Create a small validation set from training data
-        print("No test split found, creating validation from train...")
-        val_size = min(500, len(train_processed) // 10)
-        val_processed = train_processed[:val_size]
-        val_ds = datasets.Dataset.from_list(val_processed)
-        val_ds.to_parquet(os.path.join(args.output_dir, "validation.parquet"))
-        print(f"Saved validation.parquet ({len(val_ds)} examples)")
+    print(f"Processing {len(test_dataset)} validation examples...")
+    val_processed = [
+        process_fn(example, idx, args.dataset_name)
+        for idx, example in enumerate(test_dataset)
+    ]
+    val_ds = datasets.Dataset.from_list(val_processed)
+    val_ds.to_parquet(os.path.join(args.output_dir, "validation.parquet"))
+    print(f"Saved validation.parquet ({len(val_ds)} examples)")
 
     print(f"\nDataset saved to {args.output_dir}")
     print(f"Sample processed entry:")

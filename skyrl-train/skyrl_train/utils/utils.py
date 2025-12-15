@@ -621,7 +621,21 @@ def initialize_ray(cfg: DictConfig):
     )
 
     env_vars = prepare_runtime_environment(cfg)
-    ray.init(runtime_env={"env_vars": env_vars})
+    # Exclude large directories from runtime env to speed up worker startup
+    # These directories contain outputs, logs, and large data files not needed by workers
+    ray.init(
+        runtime_env={
+            "env_vars": env_vars,
+            "excludes": [
+                "exports/",
+                "outputs/",
+                "logs/",
+                "wandb/",
+                "data/",
+                "core.*",
+            ],
+        }
+    )
 
     # create the named ray actors for the registries to make available to all workers
     sync_registries()

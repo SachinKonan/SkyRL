@@ -89,6 +89,22 @@ class BaseTextEnv(Env[ConversationType, str]):
         """
         return {}
 
+    def set_history(self, chat_history: ConversationType, turn: int = 0) -> None:
+        """Set the conversation history for branching.
+
+        This method is used by branched rollouts to restore the environment state
+        to a specific point in a previous trajectory. Subclasses that maintain
+        additional state (like chat_history for reward computation) should override
+        this method.
+
+        Args:
+            chat_history: The conversation history to restore (list of messages).
+                         This should contain all messages up to (but not including)
+                         the current partial assistant message being regenerated.
+            turn: The turn count to restore.
+        """
+        self.turns = turn
+
     @staticmethod
     def aggregate_metrics(metrics: List[Dict[str, Any]]) -> Dict[str, Any]:
         """

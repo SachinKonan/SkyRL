@@ -274,6 +274,18 @@ def dump_per_dataset_eval_results(
                 # Add per-step timing if available
                 if concat_generator_outputs.get("steps") is not None:
                     entry["steps"] = concat_generator_outputs["steps"][i]
+                # Add trajectory_id info (including branching metadata)
+                if concat_generator_outputs.get("trajectory_ids") is not None:
+                    traj_id = concat_generator_outputs["trajectory_ids"][i]
+                    entry["trajectory_id"] = traj_id.to_string()
+                    entry["instance_id"] = traj_id.instance_id
+                    entry["repetition_id"] = traj_id.repetition_id
+                    # Add branching metadata if available (BranchedTrajectoryID)
+                    if hasattr(traj_id, "source_repetition_id"):
+                        entry["is_branched"] = not traj_id.is_root()
+                        entry["source_repetition_id"] = traj_id.source_repetition_id
+                        entry["branch_turn"] = traj_id.branch_turn
+                        entry["branch_token_idx"] = traj_id.branch_token_idx
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
         logger.info(f"Dumped eval data for {data_source} to {filename}")

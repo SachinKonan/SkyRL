@@ -8,6 +8,7 @@ This environment performs retrieval-augmented generation using:
 No separate server needed - everything runs in the driver process.
 """
 
+import copy
 import logging
 import re
 import threading
@@ -206,9 +207,9 @@ class SearchR1EmbeddingsEnv(BaseTextEnv):
 
     def _get_reward(self, action: str, done: bool) -> float:
         if done:
-            # Concat all chat history into a single string and compute reward
-            chat_history_str = "".join([item["content"] for item in self.chat_history])
-            return compute_score(chat_history_str, self.ground_truth)
+            # Extract answer from the action (final response) and compute reward
+            # The <answer>...</answer> tag is in the action, no need for full chat history
+            return compute_score(action, self.ground_truth)
         else:
             # No reward for intermediate steps
             return 0
@@ -256,10 +257,17 @@ class SearchR1EmbeddingsEnv(BaseTextEnv):
             observation = "\n<information>No search query found. Use <search>query</search> format.</information>\n"
 
         # Wrap the observation properly as a message
+        # Add turns remaining info if not done
+        turns_remaining = self.max_turns - self.turns
+        if turns_remaining > 0:
+            turns_suffix = f"Num turns remaining: {turns_remaining}\n"
+        else:
+            turns_suffix = ""
+
         if observation:
-            new_obs = {"role": "user", "content": observation}
+            new_obs = {"role": "user", "content": observation + turns_suffix}
         elif error:
-            new_obs = {"role": "user", "content": f"\n<information>Error: {error}</information>\n"}
+            new_obs = {"role": "user", "content": f"\n<information>Error: {error}</information>\n" + turns_suffix}
         else:
             new_obs = None
 
