@@ -185,6 +185,7 @@ trainer:
   logger: "wandb"
   dump_data_batch: false
   dump_eval_results: true
+  dump_every_batch: false  # If true, dump results after each batch (for long evaluations)
 
   # YaRN:
   rope_scaling: null
@@ -297,6 +298,11 @@ generator:
     enabled: false  # Set to true to use branched rollouts
     src_trajectories: 2  # Number of root trajectories to start with (< n_samples_per_prompt)
     num_branches: 2  # Number of branches to spawn per completed trajectory
+    strategy: "random"  # "random" or "gemini" - how to select branch points
+    gemini:  # Config for gemini strategy (uses Gemini to intelligently select branch points)
+      model: "gemini-2.5-flash"
+      timeout: 30.0
+      max_retries: 5
 
   # rope parameters, can be optionally different from the trainer , useful in some cases like with thinking models.
   rope_scaling: ${trainer.rope_scaling}

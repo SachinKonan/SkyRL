@@ -56,8 +56,19 @@ async def evaluate(
     concat_env_extras: List[Dict[str, Any]] = []
     concat_uids: List[str] = []
     sampling_params = cfg.generator.eval_sampling_params
+
+    # Setup batch-level dumping if enabled
+    dump_every_batch = getattr(cfg.trainer, "dump_every_batch", False)
+    if dump_every_batch:
+        data_save_dir = (
+            Path(cfg.trainer.export_path)
+            / "dumped_evals"
+            / ("eval_only" if global_step is None else f"global_step_{global_step}_evals")
+        )
+        data_save_dir.mkdir(parents=True, exist_ok=True)
+
     pbar = tqdm(total=len(eval_dataloader), initial=0, desc="Evaluation Progress")
-    for _, prompts in enumerate(eval_dataloader):
+    for batch_idx, prompts in enumerate(eval_dataloader):
         pbar.update(1)
         generator_input, uids = prepare_generator_input(
             prompts,
@@ -70,9 +81,31 @@ async def evaluate(
         generator_output: GeneratorOutput = await generator.generate(generator_input)
         validate_generator_output(len(generator_input["prompts"]), generator_output)
         generator_outputs.append(generator_output)
-        concat_all_envs.extend(generator_input["env_classes"])
-        concat_env_extras.extend(generator_input["env_extras"])
+
+        # Track per-batch data for dumping
+        batch_envs = generator_input["env_classes"]
+        batch_env_extras = generator_input["env_extras"]
+        batch_data_sources = [env_extra.get("data_source") for env_extra in batch_env_extras]
+
+        concat_all_envs.extend(batch_envs)
+        concat_env_extras.extend(batch_env_extras)
         concat_uids.extend(uids)
+
+        # Dump this batch immediately if enabled
+        if dump_every_batch:
+            batch_save_dir = data_save_dir / f"batch_{batch_idx}"
+            batch_save_dir.mkdir(parents=True, exist_ok=True)
+            dump_per_dataset_eval_results(
+                batch_save_dir,
+                tokenizer,
+                generator_output,
+                batch_data_sources,
+                batch_envs,
+                batch_env_extras,
+                {},  # No metrics for individual batches
+            )
+            logger.info(f"Dumped batch {batch_idx} to {batch_save_dir}")
+
     concat_generator_outputs: GeneratorOutput = concatenate_generator_outputs(generator_outputs)
 
     # Extract data_sources from env_extras
@@ -151,8 +184,19 @@ async def evaluate_step_wise(
     concat_env_extras: List[Dict[str, Any]] = []
     concat_uids: List[str] = []
     sampling_params = cfg.generator.eval_sampling_params
+
+    # Setup batch-level dumping if enabled
+    dump_every_batch = getattr(cfg.trainer, "dump_every_batch", False)
+    if dump_every_batch:
+        data_save_dir = (
+            Path(cfg.trainer.export_path)
+            / "dumped_evals"
+            / ("eval_only" if global_step is None else f"global_step_{global_step}_evals")
+        )
+        data_save_dir.mkdir(parents=True, exist_ok=True)
+
     pbar = tqdm(total=len(eval_dataloader), initial=0, desc="Evaluation Progress")
-    for _, prompts in enumerate(eval_dataloader):
+    for batch_idx, prompts in enumerate(eval_dataloader):
         pbar.update(1)
         generator_input, uids = prepare_generator_input(
             prompts,
@@ -169,13 +213,40 @@ async def evaluate_step_wise(
                 generator_input["trajectory_ids"], generator_input["env_classes"], generator_input["env_extras"]
             )
         }
+
+        # Track per-batch data for dumping
+        batch_envs = []
+        batch_env_extras = []
+
         for traj_id in generator_output["trajectory_ids"]:
             assert traj_id.instance_id in traj_id_to_input, f"Trajectory ID {traj_id.instance_id} not found in input"
-            concat_all_envs.append(traj_id_to_input[traj_id.instance_id]["env_class"])
-            concat_env_extras.append(traj_id_to_input[traj_id.instance_id]["env_extras"])
+            env_class = traj_id_to_input[traj_id.instance_id]["env_class"]
+            env_extra = traj_id_to_input[traj_id.instance_id]["env_extras"]
+            concat_all_envs.append(env_class)
+            concat_env_extras.append(env_extra)
             concat_uids.append(traj_id.instance_id)
+            batch_envs.append(env_class)
+            batch_env_extras.append(env_extra)
+
         # validate_generator_output(generator_input, generator_output)
         generator_outputs.append(generator_output)
+
+        # Dump this batch immediately if enabled
+        if dump_every_batch:
+            batch_data_sources = [env_extra.get("data_source") for env_extra in batch_env_extras]
+            batch_save_dir = data_save_dir / f"batch_{batch_idx}"
+            batch_save_dir.mkdir(parents=True, exist_ok=True)
+            dump_per_dataset_eval_results(
+                batch_save_dir,
+                tokenizer,
+                generator_output,
+                batch_data_sources,
+                batch_envs,
+                batch_env_extras,
+                {},  # No metrics for individual batches
+            )
+            logger.info(f"Dumped batch {batch_idx} to {batch_save_dir}")
+
     concat_generator_outputs: GeneratorOutput = concatenate_generator_outputs(generator_outputs)
 
     # Extract data_sources from env_extras

@@ -34,6 +34,18 @@ from skyrl_train.inference_engines.inference_engine_client import InferenceEngin
 
 
 @dataclass
+class BranchPointMetadata:
+    """Metadata about how a branch point was selected."""
+
+    strategy: str  # "random" or "gemini"
+    gemini_raw_response: Optional[str] = None
+    gemini_suggested_substring: Optional[str] = None
+    fallback_occurred: bool = False
+    fallback_reason: Optional[str] = None
+    token_position_found: Optional[int] = None
+
+
+@dataclass
 class BranchPoint:
     """Information about where to branch from a completed trajectory."""
 
@@ -44,6 +56,7 @@ class BranchPoint:
     prefix_logprobs: Optional[List[float]]  # logprobs[:branch_token_idx]
     initial_prompt: ConversationType  # Original prompt for creating new env
     original_prompt_length: int  # Length of original prompt_ids (for separating prompt from response)
+    metadata: Optional[BranchPointMetadata] = None  # How this branch point was selected
 
 
 @dataclass
@@ -55,6 +68,7 @@ class CompletedTrajectory:
     prompt: ConversationType
     env_class: str
     env_extras: Dict[str, Any]
+    branch_metadata: Optional[BranchPointMetadata] = None  # How this trajectory's branch was selected
 
 
 class BranchedSkyRLGymGenerator(SkyRLGymGenerator):
@@ -95,6 +109,16 @@ class BranchedSkyRLGymGenerator(SkyRLGymGenerator):
         self.branching_enabled = getattr(branching_cfg, "enabled", True)
         self.src_trajectories = getattr(branching_cfg, "src_trajectories", 2)
         self.num_branches = getattr(branching_cfg, "num_branches", 2)
+        self.branching_strategy = getattr(branching_cfg, "strategy", "random")
+
+        # Gemini branching config
+        gemini_cfg = getattr(branching_cfg, "gemini", DictConfig({}))
+        self.gemini_model = getattr(gemini_cfg, "model", "gemini-2.5-flash")
+        self.gemini_timeout = getattr(gemini_cfg, "timeout", 30.0)
+        self.gemini_max_retries = getattr(gemini_cfg, "max_retries", 5)
+
+        # Lazy-initialized Gemini client
+        self._gemini_client = None
 
         # Random number generator for reproducible branching
         self.rng = random.Random()
@@ -129,12 +153,81 @@ class BranchedSkyRLGymGenerator(SkyRLGymGenerator):
 
         return boundaries
 
-    def _sample_branch_point(
+    def _get_gemini_client(self):
+        """Lazy initialization of Gemini branching client."""
+        if self._gemini_client is None:
+            from skyrl_gym.envs.searchr1embeddings.branching import GeminiBranchingClient
+
+            self._gemini_client = GeminiBranchingClient(
+                model=self.gemini_model,
+                timeout=self.gemini_timeout,
+                max_retries=self.gemini_max_retries,
+            )
+        return self._gemini_client
+
+    def _find_token_sequence_position(
+        self, substring: str, response_ids: List[int]
+    ) -> Optional[int]:
+        """Find position of substring in response_ids by tokenizing and searching.
+
+        1. Tokenize the substring to get token IDs
+        2. Search for that token sequence in response_ids
+        3. Return position AFTER the match (where to branch)
+
+        If multiple matches, returns the later one (more exploration).
+        Returns None if no match found.
+        """
+        # Tokenize the substring
+        substring_ids = self.tokenizer.encode(substring, add_special_tokens=False)
+
+        if not substring_ids:
+            return None
+
+        # Search for token sequence in response_ids
+        matches = []
+        for i in range(len(response_ids) - len(substring_ids) + 1):
+            if list(response_ids[i : i + len(substring_ids)]) == list(substring_ids):
+                # Position AFTER the match
+                matches.append(i + len(substring_ids))
+
+        if not matches:
+            return None
+
+        # Return later match (prefer more exploration)
+        return matches[-1]
+
+    def _validate_branch_position(
+        self, token_idx: int, loss_mask: List[int], steps: List[Dict[str, Any]]
+    ) -> bool:
+        """Validate that the token position is in an assistant turn (loss_mask=1).
+
+        Also checks that position is not at the very start or end.
+        """
+        if token_idx < 1 or token_idx >= len(loss_mask) - 1:
+            return False
+
+        # Check that token is in assistant turn
+        if loss_mask[token_idx] != 1:
+            return False
+
+        return True
+
+    def _find_turn_for_position(
+        self, token_idx: int, steps: List[Dict[str, Any]]
+    ) -> int:
+        """Find which turn (0-indexed) a token position belongs to."""
+        model_steps = [s for s in steps if s["type"] == "model"]
+        for i, step in enumerate(model_steps):
+            if step["start_ix"] <= token_idx < step["end_ix"]:
+                return i
+        return 0  # Default to first turn
+
+    def _sample_branch_point_random(
         self,
         output: AgentLoopOutput,
         prompt: ConversationType,
     ) -> Optional[BranchPoint]:
-        """Sample a branch point from a completed trajectory.
+        """Sample a branch point randomly from a completed trajectory.
 
         Uses output.steps to find turn boundaries and picks a random position
         within the first 50% of a randomly selected turn.
@@ -181,7 +274,126 @@ class BranchedSkyRLGymGenerator(SkyRLGymGenerator):
             prefix_logprobs=prefix_logprobs,
             initial_prompt=prompt,
             original_prompt_length=len(output.prompt_ids),
+            metadata=BranchPointMetadata(strategy="random"),
         )
+
+    def _sample_branch_point_gemini(
+        self,
+        output: AgentLoopOutput,
+        prompt: ConversationType,
+    ) -> Optional[BranchPoint]:
+        """Sample a branch point using Gemini to suggest the location.
+
+        Falls back to random selection if Gemini fails or returns invalid result.
+        """
+        # Decode response to get full trajectory text
+        full_text = self.tokenizer.decode(output.response_ids, skip_special_tokens=False)
+
+        # Calculate total reward
+        if isinstance(output.reward, list):
+            total_reward = sum(output.reward)
+        else:
+            total_reward = output.reward
+
+        num_turns = len([s for s in output.steps if s["type"] == "model"])
+
+        # Initialize metadata
+        metadata = BranchPointMetadata(strategy="gemini")
+
+        # Call Gemini
+        try:
+            client = self._get_gemini_client()
+            result = client.select_branch_point(
+                full_trajectory_text=full_text,
+                reward=total_reward,
+                num_turns=num_turns,
+            )
+        except Exception as e:
+            logger.warning(f"Gemini client error: {e}, falling back to random")
+            branch_point = self._sample_branch_point_random(output, prompt)
+            if branch_point:
+                branch_point.metadata = BranchPointMetadata(
+                    strategy="gemini",
+                    fallback_occurred=True,
+                    fallback_reason=f"client_error:{type(e).__name__}",
+                )
+            return branch_point
+
+        # Update metadata with Gemini response
+        metadata.gemini_raw_response = result.raw_response
+        metadata.gemini_suggested_substring = result.suggested_substring
+
+        if not result.success:
+            # Gemini failed, fallback to random
+            logger.debug(f"Gemini branching failed ({result.fallback_reason}), using random")
+            branch_point = self._sample_branch_point_random(output, prompt)
+            if branch_point:
+                branch_point.metadata = metadata
+                branch_point.metadata.fallback_occurred = True
+                branch_point.metadata.fallback_reason = result.fallback_reason
+            return branch_point
+
+        # Find substring in response_ids via token sequence matching
+        token_idx = self._find_token_sequence_position(
+            result.suggested_substring, output.response_ids
+        )
+
+        if token_idx is None:
+            # Token sequence not found, fallback
+            logger.debug("Gemini substring token sequence not found, using random")
+            branch_point = self._sample_branch_point_random(output, prompt)
+            if branch_point:
+                branch_point.metadata = metadata
+                branch_point.metadata.fallback_occurred = True
+                branch_point.metadata.fallback_reason = "token_sequence_not_found"
+            return branch_point
+
+        # Validate position is in assistant turn
+        if not self._validate_branch_position(token_idx, output.loss_mask, output.steps):
+            logger.debug(f"Gemini token position {token_idx} not in assistant turn, using random")
+            branch_point = self._sample_branch_point_random(output, prompt)
+            if branch_point:
+                branch_point.metadata = metadata
+                branch_point.metadata.fallback_occurred = True
+                branch_point.metadata.fallback_reason = "position_not_in_assistant"
+            return branch_point
+
+        # Find which turn this belongs to
+        turn_idx = self._find_turn_for_position(token_idx, output.steps)
+
+        # Build prefix
+        prefix_input_ids = list(output.prompt_ids) + list(output.response_ids[:token_idx])
+        prefix_loss_mask = list(output.loss_mask[:token_idx])
+        prefix_logprobs = (
+            list(output.rollout_logprobs[:token_idx]) if output.rollout_logprobs else None
+        )
+
+        # Update metadata with success info
+        metadata.token_position_found = token_idx
+        metadata.fallback_occurred = False
+
+        logger.debug(f"Gemini selected branch at turn {turn_idx}, token {token_idx}")
+
+        return BranchPoint(
+            branch_turn=turn_idx,
+            branch_token_idx=token_idx,
+            prefix_input_ids=prefix_input_ids,
+            prefix_loss_mask=prefix_loss_mask,
+            prefix_logprobs=prefix_logprobs,
+            initial_prompt=prompt,
+            original_prompt_length=len(output.prompt_ids),
+            metadata=metadata,
+        )
+
+    def _sample_branch_point(
+        self,
+        output: AgentLoopOutput,
+        prompt: ConversationType,
+    ) -> Optional[BranchPoint]:
+        """Sample a branch point using configured strategy."""
+        if self.branching_strategy == "gemini":
+            return self._sample_branch_point_gemini(output, prompt)
+        return self._sample_branch_point_random(output, prompt)
 
     async def agent_loop_from_prefix(
         self,
@@ -385,7 +597,11 @@ class BranchedSkyRLGymGenerator(SkyRLGymGenerator):
         and spawn branches until reaching group_size.
         """
         completed: List[CompletedTrajectory] = []
-        active_tasks: Dict[asyncio.Task, Tuple[ConversationType, str, Dict[str, Any], BranchedTrajectoryID]] = {}
+        # Task -> (prompt, env_class, env_extras, traj_id, branch_metadata)
+        active_tasks: Dict[
+            asyncio.Task,
+            Tuple[ConversationType, str, Dict[str, Any], BranchedTrajectoryID, Optional[BranchPointMetadata]]
+        ] = {}
 
         # Use the first prompt/env_class/env_extras as template
         prompt = prompts[0]
@@ -419,7 +635,7 @@ class BranchedSkyRLGymGenerator(SkyRLGymGenerator):
                     trajectory_id=traj_id,
                 )
             )
-            active_tasks[task] = (prompt, env_class, env_extras, traj_id)
+            active_tasks[task] = (prompt, env_class, env_extras, traj_id, None)  # Root has no branch_metadata
 
         # Process trajectories as they complete
         while len(completed) < group_size and active_tasks:
@@ -429,7 +645,7 @@ class BranchedSkyRLGymGenerator(SkyRLGymGenerator):
             )
 
             for task in done_tasks:
-                prompt, env_class, env_extras, traj_id = active_tasks.pop(task)
+                prompt, env_class, env_extras, traj_id, branch_metadata = active_tasks.pop(task)
 
                 try:
                     output = await task
@@ -444,6 +660,7 @@ class BranchedSkyRLGymGenerator(SkyRLGymGenerator):
                     prompt=prompt,
                     env_class=env_class,
                     env_extras=env_extras,
+                    branch_metadata=branch_metadata,
                 ))
 
                 logger.debug(
@@ -487,7 +704,9 @@ class BranchedSkyRLGymGenerator(SkyRLGymGenerator):
                                 trajectory_id=branch_traj_id,
                             )
                         )
-                        active_tasks[branch_task] = (prompt, env_class, env_extras, branch_traj_id)
+                        active_tasks[branch_task] = (
+                            prompt, env_class, env_extras, branch_traj_id, branch_point.metadata
+                        )
 
                         logger.debug(
                             f"[{uid}] Spawned branch from rep_id={traj_id.repetition_id} "
@@ -594,6 +813,32 @@ class BranchedSkyRLGymGenerator(SkyRLGymGenerator):
         rollout_metrics["branching/num_roots"] = num_roots
         rollout_metrics["branching/num_branches"] = num_branches
         rollout_metrics["branching/branch_ratio"] = num_branches / max(num_roots, 1)
+
+        # Add Gemini-specific metrics if using gemini strategy
+        if self.branching_strategy == "gemini":
+            gemini_successes = 0
+            gemini_fallbacks = 0
+            fallback_reasons: Dict[str, int] = {}
+
+            for ct in all_completed:
+                if ct.branch_metadata is not None:
+                    if ct.branch_metadata.strategy == "gemini":
+                        if ct.branch_metadata.fallback_occurred:
+                            gemini_fallbacks += 1
+                            reason = ct.branch_metadata.fallback_reason or "unknown"
+                            fallback_reasons[reason] = fallback_reasons.get(reason, 0) + 1
+                        else:
+                            gemini_successes += 1
+
+            rollout_metrics["branching/gemini_successes"] = gemini_successes
+            rollout_metrics["branching/gemini_fallbacks"] = gemini_fallbacks
+            rollout_metrics["branching/gemini_success_rate"] = (
+                gemini_successes / max(gemini_successes + gemini_fallbacks, 1)
+            )
+            for reason, count in fallback_reasons.items():
+                # Sanitize reason for metric name
+                safe_reason = reason.replace(":", "_").replace(" ", "_")
+                rollout_metrics[f"branching/fallback_{safe_reason}"] = count
 
         generator_output: GeneratorOutput = {
             "prompt_token_ids": prompt_token_ids,

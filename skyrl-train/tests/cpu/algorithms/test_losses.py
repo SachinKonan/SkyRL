@@ -4,11 +4,19 @@ Tests for policy loss functions.
 uv run --isolated --extra dev -- pytest tests/cpu/algorithms/test_losses.py
 """
 
+import numpy as np
 import pytest
 import torch
 from omegaconf import DictConfig
 
-from skyrl_train.utils.ppo_utils import PolicyLossRegistry, masked_mean
+from skyrl_train.utils.ppo_utils import (
+    PolicyLossRegistry,
+    masked_mean,
+    TrieNode,
+    build_prefix_trie,
+    compute_localized_stats,
+    compute_branched_grpo_advantage,
+)
 
 
 # Adapted a good test from NeMO-RL
@@ -563,3 +571,468 @@ def test_kl_cov_policy_loss():
     assert not torch.allclose(
         loss, regular_loss, rtol=1e-3
     ), f"KL-Cov and regular PPO should differ: kl_cov={loss:.6f} vs regular={regular_loss:.6f}"
+
+
+def test_branched_grpo_prefix_trie():
+    """Tests prefix trie construction and localized statistics for branched GRPO.
+
+    This test verifies the core mechanism of branched GRPO: building a prefix trie
+    over trajectories and computing localized mean/std for tokens in shared prefixes.
+
+    Example with branching:
+        traj_1: [A, B, C, D, E] → reward r1
+        traj_2: [A, B, C, X, Y] → reward r2 (branched from traj_1 at token C)
+        traj_3: [A, B, C, X, Z] → reward r3 (branched from traj_2 at token X)
+
+    Localized advantages:
+        - Tokens A, B, C: use mean([r1, r2, r3]), std([r1, r2, r3]) — 3 trajectories share this prefix
+        - Token D, E: use group mean/std (only traj_1 continues here)
+        - Token X: use mean([r2, r3]), std([r2, r3]) — 2 trajectories share this prefix
+        - Token Y: use group mean/std (only traj_2)
+        - Token Z: use group mean/std (only traj_3)
+    """
+
+    device = "cpu"
+
+    # Create test data: 3 trajectories with branching structure
+    # traj_1: [1, 2, 3, 4, 5] → reward 1.0
+    # traj_2: [1, 2, 3, 6, 7] → reward 0.5 (branched at token 3)
+    # traj_3: [1, 2, 3, 6, 8] → reward 0.0 (branched at token 6)
+    sequences = torch.tensor(
+        [
+            [1, 2, 3, 4, 5, 0, 0],  # traj_1
+            [1, 2, 3, 6, 7, 0, 0],  # traj_2
+            [1, 2, 3, 6, 8, 0, 0],  # traj_3
+        ],
+        device=device,
+    )
+
+    rewards = torch.tensor([1.0, 0.5, 0.0], device=device)
+
+    attention_mask = torch.tensor(
+        [
+            [1, 1, 1, 1, 1, 0, 0],
+            [1, 1, 1, 1, 1, 0, 0],
+            [1, 1, 1, 1, 1, 0, 0],
+        ],
+        device=device,
+    )
+
+    # Build prefix trie
+    trie_root = build_prefix_trie(sequences, rewards, attention_mask)
+
+    # Verify trie structure: tokens 1, 2, 3 should have all 3 trajectories
+    node = trie_root
+    for token_id in [1, 2, 3]:
+        node = node.children[token_id]
+        assert len(node.trajectory_rewards) == 3, f"Token {token_id} should have 3 trajectories"
+        assert set(node.trajectory_rewards) == {1.0, 0.5, 0.0}
+
+    # Token 4 should have only traj_1
+    node_after_3 = trie_root.children[1].children[2].children[3]
+    assert 4 in node_after_3.children
+    node_4 = node_after_3.children[4]
+    assert len(node_4.trajectory_rewards) == 1
+    assert node_4.trajectory_rewards[0] == 1.0
+
+    # Token 6 should have traj_2 and traj_3
+    assert 6 in node_after_3.children
+    node_6 = node_after_3.children[6]
+    assert len(node_6.trajectory_rewards) == 2
+    assert set(node_6.trajectory_rewards) == {0.5, 0.0}
+
+    # Compute localized stats
+    group_mean = rewards.mean().item()  # 0.5
+    group_std = rewards.std().item()  # 0.5
+
+    localized_means, localized_stds = compute_localized_stats(
+        trie_root, sequences, attention_mask, group_mean, group_std
+    )
+
+    # Hand-calculated expected values:
+    # Positions 0, 1, 2 (tokens 1, 2, 3): all 3 trajectories share
+    #   mean = (1.0 + 0.5 + 0.0) / 3 = 0.5
+    #   std = sqrt(((1.0-0.5)^2 + (0.5-0.5)^2 + (0.0-0.5)^2) / 3) ≈ 0.4082
+    expected_mean_3_trajs = 0.5
+    expected_std_3_trajs = torch.tensor([1.0, 0.5, 0.0]).std().item()  # ≈ 0.5 (sample std)
+
+    # Position 3 for traj_1 (token 4): only 1 trajectory → falls back to group stats
+    # Position 3 for traj_2, traj_3 (token 6): 2 trajectories share
+    #   mean = (0.5 + 0.0) / 2 = 0.25
+    #   std = sqrt(((0.5-0.25)^2 + (0.0-0.25)^2) / 2) ≈ 0.3536
+    expected_mean_2_trajs = 0.25
+    expected_std_2_trajs = torch.tensor([0.5, 0.0]).std().item()  # ≈ 0.3536 (sample std)
+
+    # Verify localized means for positions 0, 1, 2 (shared by all 3)
+    for pos in range(3):
+        for traj_idx in range(3):
+            assert localized_means[traj_idx, pos].item() == pytest.approx(expected_mean_3_trajs, abs=1e-5)
+            assert localized_stds[traj_idx, pos].item() == pytest.approx(expected_std_3_trajs, abs=1e-5)
+
+    # Verify position 3 for traj_1 (token 4) uses group stats
+    assert localized_means[0, 3].item() == pytest.approx(group_mean, abs=1e-5)
+    assert localized_stds[0, 3].item() == pytest.approx(group_std, abs=1e-5)
+
+    # Verify position 3 for traj_2, traj_3 (token 6) uses localized stats from 2 trajectories
+    assert localized_means[1, 3].item() == pytest.approx(expected_mean_2_trajs, abs=1e-5)
+    assert localized_means[2, 3].item() == pytest.approx(expected_mean_2_trajs, abs=1e-5)
+    assert localized_stds[1, 3].item() == pytest.approx(expected_std_2_trajs, abs=1e-5)
+    assert localized_stds[2, 3].item() == pytest.approx(expected_std_2_trajs, abs=1e-5)
+
+
+def test_branched_grpo_advantage_computation():
+    """Tests the full branched GRPO advantage computation.
+
+    Verifies that advantages are computed correctly using localized statistics
+    at branch points, with proper masking for model-generated tokens.
+    """
+
+    device = "cpu"
+
+    # Create test data: 3 trajectories with branching structure
+    sequences = torch.tensor(
+        [
+            [1, 2, 3, 4, 5, 0, 0],  # traj_1
+            [1, 2, 3, 6, 7, 0, 0],  # traj_2
+            [1, 2, 3, 6, 8, 0, 0],  # traj_3
+        ],
+        device=device,
+    )
+
+    attention_mask = torch.tensor(
+        [
+            [1, 1, 1, 1, 1, 0, 0],
+            [1, 1, 1, 1, 1, 0, 0],
+            [1, 1, 1, 1, 1, 0, 0],
+        ],
+        device=device,
+    )
+
+    # Token-level rewards: outcome reward placed at last valid token (position 4)
+    token_level_rewards = torch.zeros(3, 7, device=device, dtype=torch.float32)
+    token_level_rewards[0, 4] = 1.0  # traj_1 reward
+    token_level_rewards[1, 4] = 0.5  # traj_2 reward
+    token_level_rewards[2, 4] = 0.0  # traj_3 reward
+
+    response_mask = attention_mask.clone().float()
+    loss_mask = attention_mask.clone().float()  # All tokens are model-generated
+
+    index = np.array(["uid1", "uid1", "uid1"])
+
+    # Compute branched GRPO advantages
+    advantages, returns = compute_branched_grpo_advantage(
+        token_level_rewards=token_level_rewards,
+        response_mask=response_mask,
+        index=index,
+        sequences=sequences,
+        attention_mask=attention_mask,
+        loss_mask=loss_mask,
+        grpo_norm_by_std=True,
+    )
+
+    # Verify output shapes
+    assert advantages.shape == (3, 7)
+    assert returns.shape == (3, 7)
+
+    # Verify padding positions have zero advantage
+    assert torch.all(advantages[:, 5:] == 0)
+
+    # Hand-calculated expected advantages for position 0 (shared by all 3):
+    # outcome_reward = [1.0, 0.5, 0.0]
+    # localized_mean = 0.5, localized_std = 0.5
+    # advantage = (outcome - mean) / (std + eps)
+    # traj_1: (1.0 - 0.5) / (0.5 + 1e-6) ≈ 1.0
+    # traj_2: (0.5 - 0.5) / (0.5 + 1e-6) ≈ 0.0
+    # traj_3: (0.0 - 0.5) / (0.5 + 1e-6) ≈ -1.0
+    assert advantages[0, 0].item() == pytest.approx(1.0, abs=1e-4)
+    assert advantages[1, 0].item() == pytest.approx(0.0, abs=1e-4)
+    assert advantages[2, 0].item() == pytest.approx(-1.0, abs=1e-4)
+
+    # Position 3 for traj_2, traj_3 (token 6) uses localized stats from 2 trajectories:
+    # localized_mean = 0.25, localized_std ≈ 0.3536
+    # traj_2: (0.5 - 0.25) / (0.3536 + 1e-6) ≈ 0.707
+    # traj_3: (0.0 - 0.25) / (0.3536 + 1e-6) ≈ -0.707
+    assert advantages[1, 3].item() == pytest.approx(0.707, abs=1e-2)
+    assert advantages[2, 3].item() == pytest.approx(-0.707, abs=1e-2)
+
+
+def test_branched_grpo_multiple_uids():
+    """Tests branched GRPO with multiple UID groups."""
+
+    device = "cpu"
+
+    # Create test data: 2 UID groups, each with 2 trajectories
+    sequences = torch.tensor(
+        [
+            [1, 2, 3, 0],  # uid1, traj_1
+            [1, 2, 4, 0],  # uid1, traj_2 (branched at token 2)
+            [5, 6, 7, 0],  # uid2, traj_1
+            [5, 6, 8, 0],  # uid2, traj_2 (branched at token 6)
+        ],
+        device=device,
+    )
+
+    attention_mask = torch.tensor(
+        [
+            [1, 1, 1, 0],
+            [1, 1, 1, 0],
+            [1, 1, 1, 0],
+            [1, 1, 1, 0],
+        ],
+        device=device,
+    )
+
+    token_level_rewards = torch.zeros(4, 4, device=device, dtype=torch.float32)
+    token_level_rewards[0, 2] = 1.0  # uid1, traj_1
+    token_level_rewards[1, 2] = 0.0  # uid1, traj_2
+    token_level_rewards[2, 2] = 0.8  # uid2, traj_1
+    token_level_rewards[3, 2] = 0.2  # uid2, traj_2
+
+    response_mask = attention_mask.clone().float()
+    loss_mask = attention_mask.clone().float()
+
+    index = np.array(["uid1", "uid1", "uid2", "uid2"])
+
+    advantages, _ = compute_branched_grpo_advantage(
+        token_level_rewards=token_level_rewards,
+        response_mask=response_mask,
+        index=index,
+        sequences=sequences,
+        attention_mask=attention_mask,
+        loss_mask=loss_mask,
+        grpo_norm_by_std=True,
+    )
+
+    # Verify UID groups are processed independently
+    # uid1: positions 0, 1 (tokens 1, 2) are shared, position 2 is not
+    # uid2: positions 0, 1 (tokens 5, 6) are shared, position 2 is not
+
+    # uid1 shared prefix (positions 0, 1): mean=0.5, std=0.707
+    # uid1 traj_1: (1.0 - 0.5) / (0.707 + 1e-6) ≈ 0.707
+    # uid1 traj_2: (0.0 - 0.5) / (0.707 + 1e-6) ≈ -0.707
+    assert advantages[0, 0].item() == pytest.approx(0.707, abs=1e-2)
+    assert advantages[1, 0].item() == pytest.approx(-0.707, abs=1e-2)
+
+    # uid2 shared prefix (positions 0, 1): mean=0.5, std=0.424
+    # uid2 traj_1: (0.8 - 0.5) / (0.424 + 1e-6) ≈ 0.707
+    # uid2 traj_2: (0.2 - 0.5) / (0.424 + 1e-6) ≈ -0.707
+    assert advantages[2, 0].item() == pytest.approx(0.707, abs=1e-2)
+    assert advantages[3, 0].item() == pytest.approx(-0.707, abs=1e-2)
+
+
+def test_branched_grpo_no_branching():
+    """Tests branched GRPO when trajectories have no shared prefixes.
+
+    When all trajectories diverge immediately, branched GRPO should behave
+    identically to standard GRPO (using group-level statistics everywhere).
+    """
+
+    device = "cpu"
+
+    # Create test data: 3 trajectories with no shared prefix
+    sequences = torch.tensor(
+        [
+            [1, 2, 3, 0],  # traj_1
+            [4, 5, 6, 0],  # traj_2
+            [7, 8, 9, 0],  # traj_3
+        ],
+        device=device,
+    )
+
+    attention_mask = torch.tensor(
+        [
+            [1, 1, 1, 0],
+            [1, 1, 1, 0],
+            [1, 1, 1, 0],
+        ],
+        device=device,
+    )
+
+    token_level_rewards = torch.zeros(3, 4, device=device, dtype=torch.float32)
+    token_level_rewards[0, 2] = 1.0
+    token_level_rewards[1, 2] = 0.5
+    token_level_rewards[2, 2] = 0.0
+
+    response_mask = attention_mask.clone().float()
+    loss_mask = attention_mask.clone().float()
+
+    index = np.array(["uid1", "uid1", "uid1"])
+
+    advantages, _ = compute_branched_grpo_advantage(
+        token_level_rewards=token_level_rewards,
+        response_mask=response_mask,
+        index=index,
+        sequences=sequences,
+        attention_mask=attention_mask,
+        loss_mask=loss_mask,
+        grpo_norm_by_std=True,
+    )
+
+    # With no shared prefixes, all positions should use group-level stats
+    # group_mean = 0.5, group_std = 0.5
+    # All positions for each trajectory should have the same advantage
+    expected_adv_traj1 = (1.0 - 0.5) / (0.5 + 1e-6)  # ≈ 1.0
+    expected_adv_traj2 = (0.5 - 0.5) / (0.5 + 1e-6)  # ≈ 0.0
+    expected_adv_traj3 = (0.0 - 0.5) / (0.5 + 1e-6)  # ≈ -1.0
+
+    for pos in range(3):
+        assert advantages[0, pos].item() == pytest.approx(expected_adv_traj1, abs=1e-4)
+        assert advantages[1, pos].item() == pytest.approx(expected_adv_traj2, abs=1e-4)
+        assert advantages[2, pos].item() == pytest.approx(expected_adv_traj3, abs=1e-4)
+
+
+def test_branched_grpo_trainer_shapes():
+    """Tests branched GRPO with shapes matching actual trainer data.
+
+    In the trainer:
+    - sequences: [batch, prompt_len + response_len] (full trajectory)
+    - attention_mask: [batch, prompt_len + response_len] (full trajectory)
+    - response_mask: [batch, response_len] (response only)
+    - loss_mask: [batch, response_len] (response only)
+    - token_level_rewards: [batch, response_len] (response only)
+    """
+    device = "cpu"
+
+    # Simulate trainer shapes: prompt_len=3, response_len=5
+    prompt_len = 3
+    response_len = 5
+    batch_size = 3
+
+    # Full sequences (prompt + response)
+    # Prompt tokens: [100, 101, 102] (same for all)
+    # Response tokens vary to create branching
+    sequences = torch.tensor(
+        [
+            [100, 101, 102, 1, 2, 3, 4, 5],  # prompt + response_1
+            [100, 101, 102, 1, 2, 3, 6, 7],  # prompt + response_2 (branches at pos 3)
+            [100, 101, 102, 1, 2, 3, 6, 8],  # prompt + response_3 (branches at pos 4)
+        ],
+        device=device,
+    )
+
+    # Full attention mask
+    attention_mask = torch.ones(batch_size, prompt_len + response_len, device=device, dtype=torch.int64)
+
+    # Response-only masks
+    response_mask = torch.ones(batch_size, response_len, device=device, dtype=torch.float32)
+    loss_mask = torch.ones(batch_size, response_len, device=device, dtype=torch.float32)
+
+    # Token-level rewards (response only)
+    token_level_rewards = torch.zeros(batch_size, response_len, device=device, dtype=torch.float32)
+    token_level_rewards[0, -1] = 1.0  # reward at last position
+    token_level_rewards[1, -1] = 0.5
+    token_level_rewards[2, -1] = 0.0
+
+    index = ["uid1", "uid1", "uid1"]  # List[str] like actual trainer
+
+    # Compute advantages
+    advantages, returns = compute_branched_grpo_advantage(
+        token_level_rewards=token_level_rewards,
+        response_mask=response_mask,
+        index=index,
+        sequences=sequences,
+        attention_mask=attention_mask,
+        loss_mask=loss_mask,
+        grpo_norm_by_std=True,
+    )
+
+    # Verify output shapes match response_mask (not sequences)
+    assert advantages.shape == (batch_size, response_len)
+    assert returns.shape == (batch_size, response_len)
+
+    # Verify advantages are computed correctly
+    # Position 0-2 in response (tokens 1,2,3) shared by all 3 trajectories
+    # localized_mean = 0.5, localized_std = 0.5
+    assert advantages[0, 0].item() == pytest.approx(1.0, abs=1e-4)  # (1.0 - 0.5) / 0.5
+    assert advantages[1, 0].item() == pytest.approx(0.0, abs=1e-4)  # (0.5 - 0.5) / 0.5
+    assert advantages[2, 0].item() == pytest.approx(-1.0, abs=1e-4)  # (0.0 - 0.5) / 0.5
+
+    # Position 3 (token 6) shared by traj_2 and traj_3 only
+    # localized_mean = 0.25, localized_std ≈ 0.3536
+    assert advantages[1, 3].item() == pytest.approx(0.707, abs=1e-2)
+    assert advantages[2, 3].item() == pytest.approx(-0.707, abs=1e-2)
+
+
+def test_branched_grpo_multi_turn_loss_mask():
+    """Tests branched GRPO with multi-turn loss mask (env tokens have loss_mask=0).
+
+    In multi-turn, loss_mask distinguishes model-generated tokens (1) from
+    env observation tokens (0). Advantages should be zero for env tokens.
+    """
+    device = "cpu"
+
+    prompt_len = 2
+    response_len = 8
+    batch_size = 2
+
+    # Full sequences
+    sequences = torch.tensor(
+        [
+            [100, 101, 1, 2, 50, 51, 3, 4, 0, 0],  # model, model, env, env, model, model, pad, pad
+            [100, 101, 1, 2, 50, 51, 5, 6, 0, 0],  # model, model, env, env, model, model, pad, pad
+        ],
+        device=device,
+    )
+
+    attention_mask = torch.tensor(
+        [
+            [1, 1, 1, 1, 1, 1, 1, 1, 0, 0],
+            [1, 1, 1, 1, 1, 1, 1, 1, 0, 0],
+        ],
+        device=device,
+    )
+
+    # Response-only: model tokens have loss_mask=1, env tokens have loss_mask=0
+    response_mask = torch.tensor(
+        [
+            [1, 1, 1, 1, 1, 1, 0, 0],  # valid response tokens
+            [1, 1, 1, 1, 1, 1, 0, 0],
+        ],
+        device=device,
+        dtype=torch.float32,
+    )
+
+    loss_mask = torch.tensor(
+        [
+            [1, 1, 0, 0, 1, 1, 0, 0],  # 1=model, 0=env or pad
+            [1, 1, 0, 0, 1, 1, 0, 0],
+        ],
+        device=device,
+        dtype=torch.float32,
+    )
+
+    token_level_rewards = torch.zeros(batch_size, response_len, device=device, dtype=torch.float32)
+    token_level_rewards[0, 5] = 1.0
+    token_level_rewards[1, 5] = 0.0
+
+    index = ["uid1", "uid1"]
+
+    advantages, _ = compute_branched_grpo_advantage(
+        token_level_rewards=token_level_rewards,
+        response_mask=response_mask,
+        index=index,
+        sequences=sequences,
+        attention_mask=attention_mask,
+        loss_mask=loss_mask,
+        grpo_norm_by_std=True,
+    )
+
+    assert advantages.shape == (batch_size, response_len)
+
+    # Env token positions (2, 3) should have zero advantage
+    assert advantages[0, 2].item() == 0.0
+    assert advantages[0, 3].item() == 0.0
+    assert advantages[1, 2].item() == 0.0
+    assert advantages[1, 3].item() == 0.0
+
+    # Padding positions should have zero advantage
+    assert advantages[0, 6].item() == 0.0
+    assert advantages[0, 7].item() == 0.0
+
+    # Model token positions should have non-zero advantage
+    # (unless normalized advantage happens to be 0)
+    # traj_1: reward=1.0, traj_2: reward=0.0, mean=0.5, std=0.707
+    # traj_1 advantage: (1.0 - 0.5) / 0.707 ≈ 0.707
+    # traj_2 advantage: (0.0 - 0.5) / 0.707 ≈ -0.707
+    assert advantages[0, 0].item() == pytest.approx(0.707, abs=1e-2)
+    assert advantages[1, 0].item() == pytest.approx(-0.707, abs=1e-2)

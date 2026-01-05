@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=searchr1_gen_qwen3_4b
+#SBATCH --job-name=searchr1_branched_grpo_src_4
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=40
+#SBATCH --cpus-per-task=30
 #SBATCH --mem=300G
 #SBATCH --gres=gpu:4
 #SBATCH --partition=ailab
-#SBATCH --time=10:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=logs/searchr1/%j.out
 #SBATCH --error=logs/searchr1/%j.err
 
@@ -43,35 +43,41 @@ mkdir -p logs/searchr1
 nvidia-smi
 
 echo "==========================================="
-echo "SearchR1 Generation-Only Evaluation"
+echo "SearchR1 Branched GRPO Training"
 echo "Model: Qwen/Qwen3-4B-Instruct-2507"
 echo "Backend: vLLM"
 echo "GPUs: 4"
+echo "Branching: src_trajectories=4, n_samples_per_prompt=10"
+echo "Advantage: branched_grpo (prefix-trie localized)"
 echo "==========================================="
 
 # Paths
 MODEL_PATH="/scratch/gpfs/ZHUANGL/sk7524/hf/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554"
 DATA_DIR="/scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train/data/searchr1"
-EXPORT_PATH="/scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train/exports/searchr1/${SLURM_JOB_ID}"
+EXPORT_PATH="/scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train/exports/searchr1_branched/${SLURM_JOB_ID}"
 CHROMA_PATH="/scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train/data/searchr1/chroma_db/tmp/tianyi/tool_caches/local_chroma/chroma_db"
 
 echo "==========================================="
-echo "Starting Generation (no server needed!)"
+echo "Starting Branched GRPO Training"
 echo "==========================================="
 
-# Run generation-only evaluation
-# ChromaDB and Gemini clients are embedded in the environment
-# NOTE: Config uses environment.skyrl_gym.<env_class>.<param> pattern
+# Run branched GRPO training
+# - generator.branching.enabled=true: Use BranchedSkyRLGymGenerator
+# - generator.branching.src_trajectories=6: Start with 6 root trajectories
+# - generator.branching.num_branches=2: Spawn 2 branches per completed trajectory
+# - generator.n_samples_per_prompt=10: Target 10 total trajectories per prompt
+# - trainer.algorithm.advantage_estimator=branched_grpo: Use prefix-trie localized advantages
 python -m skyrl_train.entrypoints.main_base \
   data.train_data="['${DATA_DIR}/parquets/train.parquet']" \
   data.val_data="['${DATA_DIR}/parquets/validation.parquet']" \
   trainer.logger="wandb" \
   trainer.project_name="searchr1" \
-  trainer.run_name="searchr1_train_qwen3_4b_4turns_maxgenlen_500_${SLURM_JOB_ID}" \
+  trainer.run_name="searchr1_branched_grpo_src4_gr10_${SLURM_JOB_ID}" \
   trainer.placement.colocate_all=true \
   trainer.strategy=fsdp2 \
   trainer.export_path="$EXPORT_PATH/exports" \
   trainer.dump_eval_results=true \
+  trainer.dump_data_batch=true \
   trainer.policy.model.path="$MODEL_PATH" \
   trainer.policy.fsdp_config.cpu_offload=false \
   trainer.policy.optimizer_config.lr=1.0e-6 \
@@ -80,7 +86,7 @@ python -m skyrl_train.entrypoints.main_base \
   trainer.placement.policy_num_gpus_per_node=4 \
   trainer.placement.ref_num_gpus_per_node=4 \
   trainer.ref.fsdp_config.cpu_offload=true \
-  trainer.algorithm.advantage_estimator="grpo" \
+  trainer.algorithm.advantage_estimator="branched_grpo" \
   trainer.algorithm.use_kl_loss=true \
   trainer.algorithm.kl_loss_coef=0.001 \
   trainer.epochs=1 \
@@ -119,6 +125,9 @@ python -m skyrl_train.entrypoints.main_base \
   generator.n_samples_per_prompt=10 \
   generator.eval_n_samples_per_prompt=10 \
   generator.weight_sync_backend=nccl \
+  generator.branching.enabled=true \
+  generator.branching.src_trajectories=4 \
+  generator.branching.num_branches=2 \
   environment.env_class=searchr1embeddings \
   environment.skyrl_gym.max_env_workers=32 \
   environment.skyrl_gym.searchr1embeddings.chroma_path="$CHROMA_PATH" \
@@ -128,9 +137,9 @@ python -m skyrl_train.entrypoints.main_base \
   "$@"
 
 if [ $? -eq 0 ]; then
-    echo "Generation completed successfully"
+    echo "Training completed successfully"
 else
-    echo "Generation failed"
+    echo "Training failed"
 fi
 
 echo "End time: $(date)"

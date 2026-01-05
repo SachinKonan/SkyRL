@@ -428,6 +428,7 @@ class BaseFunctionRegistry:
 class AdvantageEstimator(StrEnum):
     GAE = "gae"
     GRPO = "grpo"
+    BRANCHED_GRPO = "branched_grpo"
     RLOO = "rloo"
     REINFORCE_PP = "reinforce++"
 
@@ -1007,6 +1008,236 @@ def compute_grpo_outcome_advantage(
         scores = scores.unsqueeze(-1) * response_mask
 
     return scores, scores
+
+
+# =============================================================================
+# Branched GRPO: Prefix-trie based localized advantage computation
+# =============================================================================
+
+
+class TrieNode:
+    """A node in the prefix trie for tracking shared trajectories.
+
+    Each node represents a token position in the sequence. It tracks which
+    trajectories pass through this node and their corresponding rewards.
+    """
+
+    __slots__ = ("children", "trajectory_indices", "trajectory_rewards")
+
+    def __init__(self):
+        self.children: dict[int, "TrieNode"] = {}  # token_id -> child node
+        self.trajectory_indices: list[int] = []  # indices of trajectories passing through
+        self.trajectory_rewards: list[float] = []  # rewards of those trajectories
+
+
+def build_prefix_trie(
+    sequences: torch.Tensor,  # [group_size, seq_len]
+    rewards: torch.Tensor,  # [group_size] - outcome rewards
+    attention_mask: torch.Tensor,  # [group_size, seq_len]
+) -> TrieNode:
+    """Build a prefix trie over all sequences in a UID group.
+
+    Args:
+        sequences: Token IDs for each trajectory [group_size, seq_len]
+        rewards: Outcome reward for each trajectory [group_size]
+        attention_mask: Valid token mask [group_size, seq_len]
+
+    Returns:
+        Root node of the prefix trie
+    """
+    root = TrieNode()
+
+    for traj_idx in range(sequences.shape[0]):
+        seq = sequences[traj_idx]
+        reward = rewards[traj_idx].item()
+        mask = attention_mask[traj_idx]
+
+        node = root
+        for pos in range(seq.shape[0]):
+            if mask[pos] == 0:  # Padding
+                break
+
+            token_id = seq[pos].item()
+            if token_id not in node.children:
+                node.children[token_id] = TrieNode()
+            node = node.children[token_id]
+            node.trajectory_indices.append(traj_idx)
+            node.trajectory_rewards.append(reward)
+
+    return root
+
+
+def compute_localized_stats(
+    trie_root: TrieNode,
+    sequences: torch.Tensor,  # [group_size, seq_len]
+    attention_mask: torch.Tensor,
+    group_mean: float,
+    group_std: float,
+    epsilon: float = 1e-6,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute per-token mean and std based on trie structure.
+
+    For each token position in each trajectory, computes the mean and std
+    of rewards from all trajectories that share that prefix. Falls back to
+    group-level statistics when only one trajectory continues from a node.
+
+    Args:
+        trie_root: Root of the prefix trie
+        sequences: Token IDs [group_size, seq_len]
+        attention_mask: Valid token mask [group_size, seq_len]
+        group_mean: Fallback mean (group-level)
+        group_std: Fallback std (group-level)
+        epsilon: Small value for numerical stability
+
+    Returns:
+        localized_means: Per-token means [group_size, seq_len]
+        localized_stds: Per-token stds [group_size, seq_len]
+    """
+    group_size, seq_len = sequences.shape
+    localized_means = torch.zeros(group_size, seq_len, device=sequences.device)
+    localized_stds = torch.zeros(group_size, seq_len, device=sequences.device)
+
+    for traj_idx in range(group_size):
+        seq = sequences[traj_idx]
+        mask = attention_mask[traj_idx]
+
+        node = trie_root
+        for pos in range(seq_len):
+            if mask[pos] == 0:
+                break
+
+            token_id = seq[pos].item()
+            node = node.children[token_id]
+
+            # How many trajectories share this prefix?
+            num_sharing = len(node.trajectory_rewards)
+
+            if num_sharing > 1:
+                # Localized statistics from trajectories sharing this prefix
+                rewards_at_node = torch.tensor(
+                    node.trajectory_rewards, device=sequences.device, dtype=torch.float32
+                )
+                localized_means[traj_idx, pos] = rewards_at_node.mean()
+                localized_stds[traj_idx, pos] = rewards_at_node.std()
+            else:
+                # Fall back to group statistics
+                localized_means[traj_idx, pos] = group_mean
+                localized_stds[traj_idx, pos] = group_std
+
+    return localized_means, localized_stds
+
+
+@register_advantage_estimator(AdvantageEstimator.BRANCHED_GRPO)
+def compute_branched_grpo_advantage(
+    token_level_rewards: torch.Tensor,  # [batch_size, seq_len]
+    response_mask: torch.Tensor,  # [batch_size, seq_len]
+    index: np.ndarray,  # [batch_size] - uid per trajectory
+    sequences: torch.Tensor,  # [batch_size, seq_len] - NEEDED for trie
+    attention_mask: torch.Tensor,  # [batch_size, seq_len] - NEEDED for trie
+    loss_mask: torch.Tensor,  # [batch_size, seq_len] - to filter model tokens
+    epsilon: float = 1e-6,
+    grpo_norm_by_std: bool = True,
+    **kwargs,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute advantage using prefix-trie localized statistics.
+
+    This is designed for branched rollouts where trajectories share common
+    prefixes. For tokens in shared prefixes, advantages are computed using
+    statistics from only the trajectories sharing that prefix, providing
+    more precise credit assignment at branch points.
+
+    Example with branching:
+        traj_1: [A, B, C, D, E] → reward r1
+        traj_2: [A, B, C, X, Y] → reward r2 (branched from traj_1 at token C)
+        traj_3: [A, B, C, X, Z] → reward r3 (branched from traj_2 at token X)
+
+    Localized advantages:
+        - Tokens A, B, C: use mean([r1, r2, r3]), std([r1, r2, r3]) — 3 trajectories share this prefix
+        - Token D, E: use group mean/std (only traj_1 continues here)
+        - Token X: use mean([r2, r3]), std([r2, r3]) — 2 trajectories share this prefix
+        - Token Y: use group mean/std (only traj_2)
+        - Token Z: use group mean/std (only traj_3)
+
+    Args:
+        token_level_rewards: Token-level rewards [batch_size, seq_len]
+        response_mask: Mask for response tokens [batch_size, seq_len]
+        index: UID for each trajectory [batch_size]
+        sequences: Full token sequences [batch_size, seq_len]
+        attention_mask: Valid token mask [batch_size, seq_len]
+        loss_mask: Model-generated token mask [batch_size, seq_len]
+        epsilon: Small value for numerical stability
+        grpo_norm_by_std: Whether to normalize by std (True) or just subtract mean
+
+    Returns:
+        advantages: Per-token advantages [batch_size, seq_len]
+        returns: Same as advantages (for compatibility)
+    """
+    # Convert index to numpy array (it may be passed as List[str])
+    index = np.asarray(index)
+
+    # Outcome rewards (sum of token_level_rewards per trajectory)
+    outcome_rewards = token_level_rewards.sum(dim=-1)  # [batch_size]
+
+    # Extract response portion of sequences and attention_mask
+    # sequences has shape [batch, prompt_len + response_len]
+    # loss_mask/response_mask have shape [batch, response_len]
+    response_len = response_mask.shape[1]
+    response_sequences = sequences[:, -response_len:]  # [batch, response_len]
+    response_attention = attention_mask[:, -response_len:]  # [batch, response_len]
+
+    # Group trajectories by UID
+    unique_uids = np.unique(index)
+
+    # Initialize output
+    advantages = torch.zeros_like(token_level_rewards)
+
+    with torch.no_grad():
+        for uid in unique_uids:
+            # Get trajectories for this UID
+            uid_mask = index == uid
+            uid_indices = np.flatnonzero(uid_mask)
+
+            uid_sequences = response_sequences[uid_mask]  # [group_size, response_len]
+            uid_attention = response_attention[uid_mask]  # [group_size, response_len]
+            uid_loss_mask = loss_mask[uid_mask]  # [group_size, response_len]
+            uid_response_mask = response_mask[uid_mask]  # [group_size, response_len]
+            uid_rewards = outcome_rewards[uid_mask]  # [group_size]
+
+            group_size = uid_sequences.shape[0]
+
+            # Compute group-level statistics (fallback)
+            if group_size == 1:
+                group_mean = 0.0
+                group_std = 1.0
+            else:
+                group_mean = uid_rewards.mean().item()
+                group_std = uid_rewards.std().item()
+
+            # Build prefix trie over response tokens
+            trie_root = build_prefix_trie(uid_sequences, uid_rewards, uid_attention)
+
+            # Compute localized mean/std per token position
+            localized_means, localized_stds = compute_localized_stats(
+                trie_root, uid_sequences, uid_attention, group_mean, group_std, epsilon
+            )
+
+            # Compute advantages: (reward - localized_mean) / (localized_std + eps)
+            # Broadcast outcome reward to all positions, then normalize
+            uid_outcome_expanded = uid_rewards.unsqueeze(-1).expand_as(uid_sequences).float()
+
+            if grpo_norm_by_std:
+                uid_advantages = (uid_outcome_expanded - localized_means) / (localized_stds + epsilon)
+            else:
+                uid_advantages = uid_outcome_expanded - localized_means
+
+            # Mask to only model-generated tokens in response
+            uid_advantages = uid_advantages * uid_loss_mask * uid_response_mask
+
+            # Write back to output
+            for local_idx, global_idx in enumerate(uid_indices):
+                advantages[global_idx] = uid_advantages[local_idx]
+
+    return advantages, advantages
 
 
 def repopulate_all_registries():

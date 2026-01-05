@@ -723,6 +723,10 @@ class RayPPOTrainer:
                 gamma=gamma,
                 lambd=lambd,
                 grpo_norm_by_std=grpo_norm_by_std,
+                # Additional kwargs for branched_grpo advantage estimator
+                sequences=data["sequences"][is_last_step],
+                attention_mask=data["attention_mask"][is_last_step],
+                loss_mask=data["loss_mask"][is_last_step],
             )
             traj_ids = (
                 torch.cat([torch.tensor([False], device=is_last_step.device), is_last_step[:-1]]).int().cumsum(dim=0)
@@ -744,6 +748,10 @@ class RayPPOTrainer:
                 gamma=self.cfg.trainer.algorithm.gamma,
                 lambd=self.cfg.trainer.algorithm.lambd,
                 grpo_norm_by_std=self.cfg.trainer.algorithm.grpo_norm_by_std,
+                # Additional kwargs for branched_grpo advantage estimator
+                sequences=data["sequences"],
+                attention_mask=data["attention_mask"],
+                loss_mask=data["loss_mask"],
             )
         data["returns"] = returns
         data["advantages"] = advantages
