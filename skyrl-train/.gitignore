@@ -10,4 +10,4 @@ dist/
 *.egg-info/
 
 /logs/
-skyrl-train/logs/
+skyrl-train/logs/examples/search/sbatch/logs/
