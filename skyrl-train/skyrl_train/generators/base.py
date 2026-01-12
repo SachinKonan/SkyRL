@@ -66,6 +66,8 @@ class GeneratorOutput(TypedDict):
     is_last_step: Optional[List[bool]]
     # Per-step timing with token indices: [{start_ix, end_ix, type, time_elapsed_s}, ...]
     steps: Optional[List[List[Dict[str, Any]]]]
+    # Environment metrics from each trajectory (e.g., prediction, ground_truth, num_search_calls)
+    env_metrics: Optional[List[Dict[str, Any]]]
 
 
 class GeneratorInterface(ABC):

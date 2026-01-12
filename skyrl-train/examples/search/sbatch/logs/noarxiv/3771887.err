@@ -1,0 +1,19 @@
+2026-01-11 03:31:37.664 | INFO     | skyrl_train.utils.utils:prepare_runtime_environment:520 - `VLLM_USE_V1` is not specified, setting `VLLM_USE_V1` to 1. To override, set `VLLM_USE_V1` explicitly
+2026-01-11 03:31:37.718 | INFO     | skyrl_train.utils.utils:prepare_runtime_environment:548 - Exporting wandb api key to ray runtime env
+2026-01-11 03:31:40,326	INFO worker.py:2012 -- Started a local Ray instance.
+/scratch/gpfs/ZHUANGL/sk7524/SkyRLSearchEnvs/skyrl-train/.venv/lib/python3.12/site-packages/ray/_private/worker.py:2051: FutureWarning: Tip: In future versions of Ray, Ray will no longer override accelerator visible devices env var if num_gpus=0 or num_gpus=None (default). To enable this behavior and turn off this error message, set RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
+  warnings.warn(
+2026-01-11 03:31:42.655 | INFO     | skyrl_train.utils.ppo_utils:sync_registries:543 - Synced registries to ray actor
+[36m(skyrl_entrypoint pid=3568863)[0m 2026-01-11 03:31:48.982 | INFO     | skyrl_train.dataset.dataset:_read_files_and_tokenize:55 - Total dataset size: 14459
+[36m(skyrl_entrypoint pid=3568863)[0m Filtering prompts longer than 20480 tokens (num_proc=8):   0%|          | 0/14459 [00:00<?, ? examples/s]
+[36m(pid=gcs_server)[0m [2026-01-11 03:32:08,469 E 3564554 3564554] (gcs_server) gcs_server.cc:302: Failed to establish connection to the event+metrics exporter agent. Events and metrics will not be exported. Exporter agent status: RpcError: Running out of retries to initialize the metrics agent. rpc_code: 14
+[33m(raylet)[0m [2026-01-11 03:32:10,290 E 3564756 3564756] (raylet) main.cc:975: Failed to establish connection to the metrics exporter agent. Metrics will not be exported. Exporter agent status: RpcError: Running out of retries to initialize the metrics agent. rpc_code: 14
+[36m(pid=3564865)[0m [2026-01-11 03:32:10,757 E 3564865 3565185] core_worker_process.cc:825: Failed to establish connection to the metrics exporter agent. Metrics will not be exported. Exporter agent status: RpcError: Running out of retries to initialize the metrics agent. rpc_code: 14
+[2026-01-11 03:32:11,242 E 3564413 3564859] core_worker_process.cc:825: Failed to establish connection to the metrics exporter agent. Metrics will not be exported. Exporter agent status: RpcError: Running out of retries to initialize the metrics agent. rpc_code: 14
+[36m(skyrl_entrypoint pid=3568863)[0m Filtering prompts longer than 20480 tokens (num_proc=8):   7%|▋         | 1000/14459 [00:29<06:39, 33.65 examples/s]
+[36m(skyrl_entrypoint pid=3568863)[0m [2026-01-11 03:32:13,205 E 3568863 3568919] core_worker_process.cc:825: Failed to establish connection to the metrics exporter agent. Metrics will not be exported. Exporter agent status: RpcError: Running out of retries to initialize the metrics agent. rpc_code: 14[32m [repeated 65x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)[0m
+[36m(skyrl_entrypoint pid=3568863)[0m Filtering prompts longer than 20480 tokens (num_proc=8):  14%|█▍        | 2000/14459 [00:31<02:44, 75.57 examples/s]
+[36m(skyrl_entrypoint pid=3568863)[0m Filtering prompts longer than 20480 tokens (num_proc=8):  21%|██        | 3000/14459 [00:36<01:51, 102.82 examples/s]
+[36m(skyrl_entrypoint pid=3568863)[0m Filtering prompts longer than 20480 tokens (num_proc=8):  28%|██▊       | 4000/14459 [00:41<01:18, 132.78 examples/s]
+[36m(skyrl_entrypoint pid=3568863)[0m Filtering prompts longer than 20480 tokens (num_proc=8):  35%|███▍      | 5000/14459 [00:43<00:54, 174.11 examples/s]
+[36m(skyrl_entrypoint pid=3568863)[0m Filtering prompts longer than 20480 tokens (num_proc=8):  41%|████▏     | 6000/14459 [00:44<00:32, 256.85 examples/s]

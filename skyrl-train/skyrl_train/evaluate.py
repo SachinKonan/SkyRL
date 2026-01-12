@@ -58,7 +58,7 @@ async def evaluate(
     sampling_params = cfg.generator.eval_sampling_params
 
     # Setup batch-level dumping if enabled
-    dump_every_batch = getattr(cfg.trainer, "dump_every_batch", False)
+    dump_every_batch = getattr(cfg.trainer, "dump_eval_every_batch", False)
     if dump_every_batch:
         data_save_dir = (
             Path(cfg.trainer.export_path)
@@ -119,13 +119,14 @@ async def evaluate(
     )
 
     # 3. Calculate overall metrics across all datasets
-    overall_avg_score, overall_pass_at_n = get_metrics_from_generator_output(concat_generator_outputs, concat_uids)
+    overall_avg_score, overall_pass_at_n, extra_metrics = get_metrics_from_generator_output(concat_generator_outputs, concat_uids)
     eval_metrics.update(
         {
             "eval/all/avg_score": overall_avg_score,
             f"eval/all/pass_at_{cfg.generator.eval_n_samples_per_prompt}": overall_pass_at_n,
         }
     )
+    eval_metrics.update({f"eval/all/{k.split('/')[-1]}": v for k, v in extra_metrics.items()})
 
     # 4. Add rollout metrics (timing, histograms, etc.)
     if concat_generator_outputs.get("rollout_metrics"):
@@ -186,7 +187,7 @@ async def evaluate_step_wise(
     sampling_params = cfg.generator.eval_sampling_params
 
     # Setup batch-level dumping if enabled
-    dump_every_batch = getattr(cfg.trainer, "dump_every_batch", False)
+    dump_every_batch = getattr(cfg.trainer, "dump_eval_every_batch", False)
     if dump_every_batch:
         data_save_dir = (
             Path(cfg.trainer.export_path)
@@ -273,13 +274,14 @@ async def evaluate_step_wise(
         generator_output_last_step, uids_last_step, data_sources_last_step, cfg.generator.eval_n_samples_per_prompt
     )
     # 3. Calculate overall metrics across all datasets
-    overall_avg_score, overall_pass_at_n = get_metrics_from_generator_output(generator_output_last_step, uids_last_step)
+    overall_avg_score, overall_pass_at_n, extra_metrics = get_metrics_from_generator_output(generator_output_last_step, uids_last_step)
     eval_metrics.update(
         {
             "eval/all/avg_score": overall_avg_score,
             f"eval/all/pass_at_{cfg.generator.eval_n_samples_per_prompt}": overall_pass_at_n,
         }
     )
+    eval_metrics.update({f"eval/all/{k.split('/')[-1]}": v for k, v in extra_metrics.items()})
 
     # 4. Prepare dumping data
     # TODO[Ben] update this to be cloud-compatible

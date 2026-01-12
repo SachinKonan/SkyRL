@@ -1,6 +1,7 @@
 import torch
+import re
 from typing import List, Tuple, Union, Optional, Dict, Any
-from collections import defaultdict
+from collections import defaultdict, Counter
 import numpy as np
 from skyrl_train.generators.base import GeneratorOutput, GeneratorInput, TrajectoryID, BatchMetadata, TrainingPhase
 from skyrl_train.inference_engines.base import ConversationType
@@ -118,15 +119,19 @@ def get_generation_prompt_ids(tokenizer) -> List[int]:
 
 
 @torch.no_grad()
-def get_metrics_from_generator_output(generator_output: GeneratorOutput, uids: List[str]) -> Tuple[float, float]:
+def get_metrics_from_generator_output(generator_output: GeneratorOutput, uids: List[str]) -> Tuple[float, float, Dict[str, float]]:
     """
-    Get `mean_raw_reward` (or avg_score), `pass_at_n` from generator output.
+    Get `mean_raw_reward` (or avg_score), `pass_at_n`, and additional metrics from generator output.
 
     The `n` in `pass_at_n` is the number of trajectories we generate for each example. It is
     calculated as `len(generator_output["rewards"]) / len(uids)`, where `len(uids)` is the number of
     unique examples.
 
     Rewards can be either per-trajectory or per-token, and metrics are computed correspondingly.
+
+    Returns:
+        Tuple of (mean_raw_reward, pass_at_n, extra_metrics)
+        extra_metrics includes majority_vote_accuracy and reward_std_in_group if env_metrics available
     """
     rewards: Union[List[float], List[List[float]]] = generator_output["rewards"]
     if not len(rewards):
@@ -155,7 +160,149 @@ def get_metrics_from_generator_output(generator_output: GeneratorOutput, uids: L
         uid_to_trajectory_rewards
     )
 
-    return mean_raw_reward, pass_at_n
+    # Compute extra metrics from env_metrics if available
+    extra_metrics = {}
+    env_metrics = generator_output.get("env_metrics")
+    if env_metrics:
+        # Compute reward std in group
+        stds = []
+        for uid, uid_rewards in uid_to_trajectory_rewards.items():
+            if len(uid_rewards) > 1:
+                stds.append(float(np.std(uid_rewards)))
+        if stds:
+            extra_metrics["reward/reward_std_in_group"] = float(np.mean(stds))
+
+        # Compute majority vote accuracy from env_metrics (prediction/ground_truth)
+        uid_to_predictions = defaultdict(list)
+        uid_to_ground_truth = {}
+        for i, uid in enumerate(uids):
+            if i < len(env_metrics):
+                pred = env_metrics[i].get("prediction")
+                gt = env_metrics[i].get("ground_truth")
+                if pred:
+                    uid_to_predictions[uid].append(pred)
+                if gt and uid not in uid_to_ground_truth:
+                    uid_to_ground_truth[uid] = gt
+
+        # Compute majority vote accuracy
+        if uid_to_predictions and uid_to_ground_truth:
+            correct = 0
+            total = 0
+            for uid, predictions in uid_to_predictions.items():
+                if uid in uid_to_ground_truth and predictions:
+                    vote_counts = Counter(predictions)
+                    majority = vote_counts.most_common(1)[0][0]
+                    gt = uid_to_ground_truth[uid]
+                    if majority.lower().strip() == gt.lower().strip():
+                        correct += 1
+                    total += 1
+            if total > 0:
+                extra_metrics["reward/avg_majority_pass_at_k"] = float(correct) / total
+
+    return mean_raw_reward, pass_at_n, extra_metrics
+
+
+def parse_prediction_from_response(response_text: str) -> Optional[str]:
+    """
+    Parse Accept/Reject prediction from response text.
+    Looks for \\boxed{Accept} or \\boxed{Reject} patterns.
+
+    Returns:
+        "Accept", "Reject", or None if not found
+    """
+    # Look for \boxed{Accept} or \boxed{Reject}
+    match = re.search(r'\\boxed\{(Accept|Reject)\}', response_text, re.IGNORECASE)
+    if match:
+        pred = match.group(1).capitalize()
+        return "Accept" if pred.lower() == "accept" else "Reject"
+    return None
+
+
+# Environment classes that support majority vote metrics (with Accept/Reject output format)
+MAJORITY_VOTE_SUPPORTED_ENVS = {"search_arxiv"}
+
+
+@torch.no_grad()
+def get_majority_vote_and_std_metrics(
+    rewards: Union[List[float], List[List[float]]],
+    uids: List[str],
+    decoded_responses: Optional[List[str]] = None,
+    ground_truths: Optional[Dict[str, str]] = None,
+    env_class: Optional[str] = None,
+) -> Dict[str, float]:
+    """
+    Compute majority vote accuracy and reward std within groups.
+
+    Args:
+        rewards: List of rewards (per-trajectory or per-token)
+        uids: List of UIDs corresponding to each trajectory
+        decoded_responses: Optional list of decoded response strings for majority vote
+        ground_truths: Optional dict mapping UID to ground truth answer ("Accept" or "Reject")
+        env_class: The environment class name (e.g., "search_arxiv"). Majority vote is only
+                   computed for environments in MAJORITY_VOTE_SUPPORTED_ENVS.
+
+    Returns:
+        Dictionary with metrics:
+        - reward/reward_std_in_group: Average std of rewards within each group
+        - reward/avg_majority_pass_at_k: Fraction of UIDs where majority vote matches ground truth
+                                         (only for supported environments)
+    """
+    metrics = {}
+
+    # Group rewards by UID
+    uid_to_rewards = defaultdict(list)
+    for i, uid in enumerate(uids):
+        if isinstance(rewards[i], list):
+            # Token-level rewards: sum to get trajectory reward
+            uid_to_rewards[uid].append(float(np.sum(rewards[i])))
+        else:
+            uid_to_rewards[uid].append(float(rewards[i]))
+
+    # Compute reward std in group
+    stds = []
+    for uid, uid_rewards in uid_to_rewards.items():
+        if len(uid_rewards) > 1:
+            stds.append(np.std(uid_rewards))
+        else:
+            stds.append(0.0)
+    metrics["reward/reward_std_in_group"] = float(np.mean(stds)) if stds else 0.0
+
+    # Only compute majority vote for supported environments
+    if env_class not in MAJORITY_VOTE_SUPPORTED_ENVS:
+        return metrics
+
+    # Compute majority vote accuracy if we have decoded responses and ground truths
+    if decoded_responses is not None and ground_truths is not None:
+        uid_to_predictions = defaultdict(list)
+        for i, uid in enumerate(uids):
+            pred = parse_prediction_from_response(decoded_responses[i])
+            if pred:
+                uid_to_predictions[uid].append(pred)
+
+        # Compute majority vote accuracy
+        correct = 0
+        total = 0
+        for uid, predictions in uid_to_predictions.items():
+            if uid in ground_truths and predictions:
+                # Take majority vote
+                vote_counts = Counter(predictions)
+                majority = vote_counts.most_common(1)[0][0]
+                gt = ground_truths[uid]
+                # Normalize ground truth
+                if gt.lower() in ["accept", "accepted"]:
+                    gt = "Accept"
+                elif gt.lower() in ["reject", "rejected"]:
+                    gt = "Reject"
+                if majority == gt:
+                    correct += 1
+                total += 1
+
+        if total > 0:
+            metrics["reward/avg_majority_pass_at_k"] = float(correct) / total
+        else:
+            metrics["reward/avg_majority_pass_at_k"] = 0.0
+
+    return metrics
 
 
 def concatenate_generator_outputs(generator_outputs: List[GeneratorOutput]) -> GeneratorOutput:
@@ -286,14 +433,20 @@ def get_rollout_metrics(
             # Aggregate metrics across all trajectories for the same environment
             agg = aggregate_for_environment(env_name, metrics)
             for key, value in agg.items():
-                rollout_metrics[f"environment/{key}"] = value
+                rollout_metrics[f"environment/{env_name}/{key}"] = value
 
     # Aggregate timing metrics from steps
     if all_steps is not None:
         all_llm_times = []
         all_env_times = []
         all_retry_counts = []
+        all_num_turns = []
+
         for traj_steps in all_steps:
+            # Count the number of model turns (LLM generations) per trajectory
+            model_turns = sum(1 for step in traj_steps if step["type"] == "model")
+            all_num_turns.append(model_turns)
+
             for step in traj_steps:
                 if step["type"] == "model":
                     all_llm_times.append(step["time_elapsed_s"])
@@ -317,6 +470,12 @@ def get_rollout_metrics(
             rollout_metrics["timing/total_gemini_retries"] = int(np.sum(all_retry_counts))
             # Store raw retry counts for histogram (wandb.Histogram)
             rollout_metrics["timing/gemini_retries_histogram"] = all_retry_counts
+
+        # Add turn count metrics
+        if all_num_turns:
+            rollout_metrics["generate/min_num_turns"] = int(np.min(all_num_turns))
+            rollout_metrics["generate/max_num_turns"] = int(np.max(all_num_turns))
+            rollout_metrics["generate/avg_num_turns"] = float(np.mean(all_num_turns))
 
     return rollout_metrics
 

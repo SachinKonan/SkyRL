@@ -185,7 +185,7 @@ trainer:
   logger: "wandb"
   dump_data_batch: false
   dump_eval_results: true
-  dump_every_batch: false  # If true, dump results after each batch (for long evaluations)
+  dump_eval_every_batch: false  # If true, dump results after each batch (for long evaluations)
 
   # YaRN:
   rope_scaling: null

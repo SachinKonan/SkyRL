@@ -41,3 +41,8 @@ register(
     id="searchr1embeddings",
     entry_point="skyrl_gym.envs.searchr1embeddings.env:SearchR1EmbeddingsEnv",
 )
+
+register(
+    id="search_arxiv",
+    entry_point="skyrl_gym.envs.search_arxiv.env:SearchArxivEnv",
+)

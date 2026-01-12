@@ -465,6 +465,7 @@ class SkyRLGymGenerator(GeneratorInterface):
             "rollout_metrics": rollout_metrics,
             "rollout_logprobs": truncated_logprobs,
             "steps": all_steps,
+            "env_metrics": env_metrics,
         }
 
         return generator_output
@@ -554,6 +555,7 @@ class SkyRLGymGenerator(GeneratorInterface):
             "rollout_metrics": rollout_metrics,
             "rollout_logprobs": rollout_logprobs,
             "steps": all_steps,
+            "env_metrics": env_metrics,
         }
 
         return generator_output
