@@ -44,6 +44,7 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "matplotlib>=3.10.8",
+    "liger-kernel"
 ]
 
 [tool.uv]

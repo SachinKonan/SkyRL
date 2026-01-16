@@ -39,7 +39,8 @@ trainer:
       max_grad_norm: 1.0 # gradient clipping
       offload_after_step: true # offload optimizer state to cpu after each full training step. Applicable only when `colocate_all=true`
       num_warmup_steps: 0 # number of mini-batch steps to warmup the optimizer for
-      scheduler: "constant_with_warmup"   
+      scheduler: "constant_with_warmup"
+      min_lr: null # minimum learning rate for cosine_with_min_lr scheduler
     fsdp_config:
       cpu_offload: false # offload params + optimizer state to cpu during fwd pass
       reshard_after_forward: true # fsdp2 only, [True, False, int between 1 and fsdp_size]
@@ -74,6 +75,7 @@ trainer:
       offload_after_step: true # offload optimizer state to cpu after each full training step. Applicable only when `colocate_all=true`
       num_warmup_steps: 0 # number of mini-batch steps to warmup the optimizer for
       scheduler: "constant_with_warmup"
+      min_lr: null # minimum learning rate for cosine_with_min_lr scheduler
     fsdp_config:
       cpu_offload: false
       reshard_after_forward: true
@@ -177,6 +179,7 @@ trainer:
   # max prompt length in training dataset
   max_prompt_length: 512
   flash_attn: true
+  use_liger_kernel: false  # Enable Liger kernel optimizations for supported models
   disable_fast_tokenizer: false
   target_modules: "all-linear"
   exclude_modules: null

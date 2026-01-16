@@ -65,6 +65,7 @@ class DeepSpeedPolicyWorkerBase(PolicyWorkerBase):
             use_torch_compile=self.cfg.trainer.policy.use_torch_compile,
             rope_scaling=get_rope_scaling_config(self.cfg.trainer),
             rope_theta=get_rope_theta_config(self.cfg.trainer),
+            use_liger_kernel=self.cfg.trainer.get("use_liger_kernel", False),
         )
 
         # configure optimizer
@@ -76,11 +77,20 @@ class DeepSpeedPolicyWorkerBase(PolicyWorkerBase):
             offload_after_step=self.cfg.trainer.policy.optimizer_config.offload_after_step,
         )
 
+        # Build scheduler kwargs
+        policy_optim_config = self.cfg.trainer.policy.optimizer_config
+        scheduler_kwargs = {
+            "num_warmup_steps": policy_optim_config.num_warmup_steps,
+            "num_training_steps": num_training_steps,
+        }
+        # Add min_lr for cosine_with_min_lr scheduler
+        if policy_optim_config.scheduler == "cosine_with_min_lr" and getattr(policy_optim_config, "min_lr", None) is not None:
+            scheduler_kwargs["scheduler_specific_kwargs"] = {"min_lr": policy_optim_config.min_lr}
+
         lr_scheduler = get_scheduler(
-            self.cfg.trainer.policy.optimizer_config.scheduler,
+            policy_optim_config.scheduler,
             optimizer,
-            num_warmup_steps=self.cfg.trainer.policy.optimizer_config.num_warmup_steps,
-            num_training_steps=num_training_steps,
+            **scheduler_kwargs,
         )
 
         if self.cfg.trainer.gradient_checkpointing:
@@ -305,11 +315,19 @@ class DeepSpeedCriticWorkerBase(CriticWorkerBase):
         )
 
         # configure scheduler
+        critic_optim_config = self.cfg.trainer.critic.optimizer_config
+        critic_scheduler_kwargs = {
+            "num_warmup_steps": critic_optim_config.num_warmup_steps,
+            "num_training_steps": num_training_steps,
+        }
+        # Add min_lr for cosine_with_min_lr scheduler
+        if critic_optim_config.scheduler == "cosine_with_min_lr" and getattr(critic_optim_config, "min_lr", None) is not None:
+            critic_scheduler_kwargs["scheduler_specific_kwargs"] = {"min_lr": critic_optim_config.min_lr}
+
         critic_scheduler = get_scheduler(
-            self.cfg.trainer.critic.optimizer_config.scheduler,
+            critic_optim_config.scheduler,
             critic_optim,
-            num_warmup_steps=self.cfg.trainer.critic.optimizer_config.num_warmup_steps,
-            num_training_steps=num_training_steps,
+            **critic_scheduler_kwargs,
         )
 
         if self.cfg.trainer.gradient_checkpointing:

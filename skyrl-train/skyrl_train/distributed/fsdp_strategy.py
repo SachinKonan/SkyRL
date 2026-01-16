@@ -289,11 +289,19 @@ class FSDPStrategy(DistributedStrategy):
                 weight_decay=optim_config.weight_decay,
             )
 
+            # Build scheduler kwargs
+            scheduler_kwargs = {
+                "num_warmup_steps": optim_config.num_warmup_steps,
+                "num_training_steps": self.total_training_steps,
+            }
+            # Add min_lr for cosine_with_min_lr scheduler
+            if optim_config.scheduler == "cosine_with_min_lr" and getattr(optim_config, "min_lr", None) is not None:
+                scheduler_kwargs["scheduler_specific_kwargs"] = {"min_lr": optim_config.min_lr}
+
             lr_scheduler = get_scheduler(
                 optim_config.scheduler,
                 new_optimizer,
-                num_warmup_steps=optim_config.num_warmup_steps,
-                num_training_steps=self.total_training_steps,
+                **scheduler_kwargs,
             )
         else:
             new_optimizer = None

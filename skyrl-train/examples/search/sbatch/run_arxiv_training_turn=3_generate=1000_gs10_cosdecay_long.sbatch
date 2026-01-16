@@ -1,19 +1,21 @@
 #!/bin/bash
-# Mini version for testing on interactive node (4x A100 80GB)
-# Usage: ./run_arxiv_training_mini.sh
-#
-# Reduced batch sizes for faster iteration and debugging
+#SBATCH --job-name=arxiv_train_qwen3_4b
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=40
+#SBATCH --mem=250G
+#SBATCH --gres=gpu:4
+#SBATCH --partition=ailab
+#SBATCH --time=36:00:00
+#SBATCH --output=logs/arxiv/%j.out
+#SBATCH --error=logs/arxiv/%j.err
 
-# srun --nodes=1 --ntasks=1 --cpus-per-task=20 --mem=200G --gres=gpu:4 --constraint="gpu80" -t 1:00:00 -p gpu-test --pty bash
-
-set -e
+# No proxy - using WANDB offline mode
 
 # Print job information
 echo "Job started on $(date)"
 echo "Running on node: $(hostname)"
-
-# Use PID as job ID for interactive runs
-JOB_ID="${SLURM_JOB_ID:-$$}"
+echo "Job ID: $SLURM_JOB_ID"
 
 # Change to the correct directory (original SkyRL repo for training)
 cd /scratch/gpfs/ZHUANGL/sk7524/SkyRLSearchEnvs/skyrl-train
@@ -23,6 +25,7 @@ echo "Working directory: $(pwd)"
 export TRANSFORMERS_OFFLINE=1
 export HF_HOME=/scratch/gpfs/ZHUANGL/sk7524/hf
 export WANDB_API_KEY="a9c6eb313dc5aab38bec7680526824ccdbb7f5f0"
+export WANDB_MODE=offline
 #export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # Suppress debug logs
@@ -35,10 +38,11 @@ mkdir -p logs/arxiv
 nvidia-smi
 
 echo "==========================================="
-echo "ArXiv Training - MINI TEST VERSION"
+echo "ArXiv Training - 3 turns, 1000 generate, gs10, cosdecay"
 echo "Model: Qwen/Qwen3-4B-Thinking-2507"
 echo "Backend: vLLM"
 echo "GPUs: 4"
+echo "Environment: search_arxiv"
 echo "==========================================="
 
 # ============================================
@@ -46,7 +50,7 @@ echo "==========================================="
 # ============================================
 MODEL_PATH="/scratch/gpfs/ZHUANGL/sk7524/hf/hub/models--Qwen--Qwen3-4B-Thinking-2507/snapshots/768f209d9ea81521153ed38c47d515654e938aea"
 DATA_DIR="/scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train/data/arxiv_iclr"
-EXPORT_PATH="/scratch/gpfs/ZHUANGL/sk7524/SkyRLSearchEnvs/skyrl-train/exports/arxiv_mini/${JOB_ID}"
+EXPORT_PATH="/scratch/gpfs/ZHUANGL/sk7524/SkyRLSearchEnvs/skyrl-train/exports/arxiv_full/${SLURM_JOB_ID}"
 
 # ArXiv index and corpus paths
 INDEX_PATH="${INDEX_PATH:-/scratch/gpfs/ZHUANGL/sk7524/SkyRL/skyrl-train/data/searchr1_original/arxiv/qwen3_06_embed/qwen3_Flat.index}"
@@ -170,14 +174,10 @@ source .venv/bin/activate
 echo "Activated virtual environment ready to train"
 
 # ============================================
-# Start Training (MINI CONFIG)
+# Start Training
 # ============================================
 echo "==========================================="
-echo "Starting Training (MINI CONFIG)"
-echo "  train_batch_size: 64 (halved)"
-echo "  policy_mini_batch_size: 32 (halved)"
-echo "  eval_batch_size: 128 (halved)"
-echo "  n_samples_per_prompt: 5 (halved)"
+echo "Starting Training"
 echo "==========================================="
 
 module load cudatoolkit/12.8
@@ -187,20 +187,22 @@ module load cudatoolkit/12.8
 python -m skyrl_train.entrypoints.main_base \
   data.train_data="['${DATA_DIR}/train.parquet']" \
   data.val_data="['${DATA_DIR}/validation.parquet']" \
-  trainer.logger="console" \
-  trainer.project_name="arxiv_acceptance_mini" \
-  trainer.run_name="arxiv_mini_${JOB_ID}" \
+  trainer.logger="wandb" \
+  trainer.project_name="arxiv_acceptance" \
+  trainer.run_name="arxiv_train_qwen3_4b_3_turns_1000gen_gs10_cosdecay_${SLURM_JOB_ID}" \
   trainer.placement.colocate_all=true \
   trainer.strategy=fsdp2 \
   trainer.export_path="$EXPORT_PATH/exports" \
-  trainer.dump_eval_results=false \
-  trainer.dump_eval_every_batch=false \
+  trainer.dump_eval_results=true \
+  trainer.dump_eval_every_batch=true \
   trainer.dump_data_batch=false \
   trainer.policy.model.path="$MODEL_PATH" \
   trainer.policy.fsdp_config.cpu_offload=false \
-  trainer.policy.optimizer_config.lr=1.0e-6 \
+  trainer.policy.optimizer_config.lr=1.2e-6 \
   trainer.policy.optimizer_config.max_grad_norm=0.5 \
-  trainer.policy.optimizer_config.num_warmup_steps=10 \
+  trainer.policy.optimizer_config.num_warmup_steps=3 \
+  trainer.policy.optimizer_config.scheduler="cosine_with_min_lr" \
+  trainer.policy.optimizer_config.min_lr=6e-7 \
   trainer.placement.policy_num_gpus_per_node=4 \
   trainer.placement.ref_num_gpus_per_node=4 \
   trainer.ref.fsdp_config.cpu_offload=true \
@@ -209,39 +211,37 @@ python -m skyrl_train.entrypoints.main_base \
   trainer.algorithm.kl_loss_coef=0.001 \
   trainer.epochs=1 \
   trainer.update_epochs_per_batch=1 \
-  trainer.train_batch_size=64 \
-  trainer.policy_mini_batch_size=32 \
+  trainer.train_batch_size=128 \
+  trainer.policy_mini_batch_size=64 \
   trainer.micro_forward_batch_size_per_gpu=2 \
   trainer.micro_train_batch_size_per_gpu=2 \
   trainer.max_prompt_length=32768 \
-  trainer.eval_batch_size=32 \
+  trainer.eval_batch_size=256 \
   trainer.eval_before_train=false \
-  trainer.eval_interval=10 \
-  trainer.ckpt_interval=50 \
-  trainer.hf_save_interval=100 \
-  trainer.max_ckpts_to_keep=2 \
-  trainer.resume_mode=latest \
-  trainer.ckpt_path="$EXPORT_PATH/ckpts" \
+  trainer.eval_interval=-1 \
+  trainer.ckpt_interval=-1 \
+  trainer.hf_save_interval=5 \
   generator.backend=vllm \
   generator.run_engines_locally=true \
   generator.async_engine=true \
   generator.batched=false \
   generator.num_inference_engines=4 \
   generator.inference_engine_tensor_parallel_size=1 \
-  generator.gpu_memory_utilization=0.8 \
-  generator.sampling_params.max_generate_length=550 \
+  generator.gpu_memory_utilization=0.85 \
+  generator.sampling_params.max_generate_length=1000 \
   generator.sampling_params.temperature=1.0 \
   generator.sampling_params.top_p=1.0 \
   generator.sampling_params.stop='["</ssearch>", "</asearch>", "</answer>"]' \
-  generator.eval_sampling_params.max_generate_length=500 \
+  generator.eval_sampling_params.max_generate_length=1000 \
   generator.eval_sampling_params.temperature=0.0 \
   generator.eval_sampling_params.stop='["</ssearch>", "</asearch>", "</answer>"]' \
   generator.max_input_length=32768 \
   generator.use_conversation_multi_turn=true \
   generator.append_eos_token_after_stop_str_in_multi_turn=true \
-  generator.max_turns=4 \
-  generator.n_samples_per_prompt=5 \
-  generator.eval_n_samples_per_prompt=5 \
+  generator.max_turns=3 \
+  generator.n_samples_per_prompt=10 \
+  generator.eval_n_samples_per_prompt=10 \
+  generator.weight_sync_backend=nccl \
   environment.env_class=search_arxiv \
   environment.skyrl_gym.max_env_workers=32 \
   +environment.skyrl_gym.search_arxiv.search_url="$SEARCH_URL" \

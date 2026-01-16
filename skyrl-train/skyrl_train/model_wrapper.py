@@ -104,27 +104,36 @@ class HFModelWrapper(nn.Module):
             else:
                 nf4_config = None
 
-            if use_liger_kernel:
-                from liger_kernel.transformers import AutoLigerKernelForCausalLM
-
-                model_class = AutoLigerKernelForCausalLM
-            else:
-                model_class = AutoModelForCausalLM
-
             rope_scaling_kwargs = {}
             if rope_scaling:
                 rope_scaling_kwargs["rope_scaling"] = rope_scaling
             if rope_theta:
                 rope_scaling_kwargs["rope_theta"] = rope_theta
 
-            self.model = model_class.from_pretrained(
+            # Load config first to get model_type for Liger kernel
+            model_config = AutoConfig.from_pretrained(
                 pretrain_or_model,
+                trust_remote_code=True,
+                **rope_scaling_kwargs,
+            )
+
+            # Apply Liger kernel patches BEFORE model loading (LlamaFactory pattern)
+            if use_liger_kernel:
+                from skyrl_train.model_utils.liger_kernel import apply_liger_kernel
+                apply_liger_kernel(
+                    config=model_config,
+                    is_trainable=True,  # HFModelWrapper is used for trainable models
+                    require_logits=True,  # RL always needs logits
+                )
+
+            self.model = AutoModelForCausalLM.from_pretrained(
+                pretrain_or_model,
+                config=model_config,
                 trust_remote_code=True,
                 attn_implementation=self.attn_implementation,
                 quantization_config=nf4_config,
                 torch_dtype=torch.bfloat16 if bf16 else torch.float32,
                 device_map=device_map,
-                **rope_scaling_kwargs,
             )
 
             # gpt oss
