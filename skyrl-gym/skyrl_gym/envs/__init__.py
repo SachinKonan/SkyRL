@@ -28,6 +28,11 @@ register(
 )
 
 register(
+    id="search_arxiv",
+    entry_point="skyrl_gym.envs.search_arxiv.env:SearchArxivEnv",
+)
+
+register(
     id="lcb",
     entry_point="skyrl_gym.envs.lcb.env:LCBEnv",
 )
