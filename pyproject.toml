@@ -149,6 +149,13 @@ miniswe = [
     "mini-swe-agent>=1.12.0",
     "litellm",
 ]
+# For the SearchArxivEnv. The env only hits the /retrieve HTTP endpoint, so this
+# extra is optional — only install if you want to import arxiv_retriever's client
+# classes. The retrieval server itself runs in a separate conda env (faiss-gpu is
+# conda-only), launched from ../arxiv_retriever.
+search-arxiv = [
+    "arxiv-retriever",
+]
 harbor = [
     "harbor[daytona,modal]; python_version >= '3.12'",
 ]
@@ -251,6 +258,7 @@ explicit = true
 
 [tool.uv.sources]
 skyrl-gym = { path = "./skyrl-gym", editable = true }
+arxiv-retriever = { path = "../arxiv_retriever", editable = true }
 # flashinfer wheels are only available from the custom cu128 index
 flashinfer-jit-cache = { index = "flashinfer-cu128", marker = "sys_platform == 'linux'" }
 causal-conv1d = { url = "https://github.com/Dao-AILab/causal-conv1d/releases/download/v1.6.1.post4/causal_conv1d-1.6.1%2Bcu12torch2.10cxx11abiTRUE-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and python_version == '3.12' and platform_machine == 'x86_64'" }

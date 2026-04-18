@@ -14,3 +14,11 @@ search:
   search_url: "http://127.0.0.1:8000/retrieve"
   topk: 3
   timeout: 30
+
+search_arxiv:
+  log_requests: false
+  search_url: "http://127.0.0.1:8000/retrieve"
+  topk: 5
+  timeout: 30
+  max_turns: 3
+  search_enabled: true
