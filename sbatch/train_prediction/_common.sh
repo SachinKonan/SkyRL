@@ -35,8 +35,10 @@ start_retriever() {
     echo "=== starting arxiv_retriever (embed=$EMBED_SIZE, port=$RETRIEVAL_PORT) ==="
     (
         set -e
-        module load anaconda3/2024.6 2>/dev/null || true
+        set +u                 # conda activate touches PS1; relax nounset.
+        module load anaconda3/2024.6
         conda activate "$RETRIEVER_CONDA_ENV"
+        set -u
         cd "$ARXIV_RETRIEVER_DIR"
         python src/arxiv_retriever/server/retrieval_server.py \
             --config "$cfg" \

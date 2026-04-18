@@ -12,11 +12,11 @@
 #SBATCH --output=logs/train_prediction/vl_%j.out
 #SBATCH --error=logs/train_prediction/vl_%j.err
 
-WORKDIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." &> /dev/null && pwd)"
+WORKDIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
 cd "$WORKDIR"
 mkdir -p logs/train_prediction
 
-source "$(dirname -- "${BASH_SOURCE[0]}")/_common.sh"
+source "$WORKDIR/sbatch/train_prediction/_common.sh"
 
 DATA_DIR="${DATA_DIR_VL:-/scratch/gpfs/ZHUANGL/sk7524/SkyRLMain/data/iclr_arxiv_vl}"
 MODEL_PATH="${MODEL_PATH:-Qwen/Qwen2.5-VL-3B-Instruct}"
