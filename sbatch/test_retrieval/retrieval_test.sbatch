@@ -28,7 +28,7 @@ ARXIV_RETRIEVER_DIR="${ARXIV_RETRIEVER_DIR:-/scratch/gpfs/ZHUANGL/sk7524/arxiv_r
 RETRIEVER_CONDA_ENV="${RETRIEVER_CONDA_ENV:-retriever}"
 WAIT_TIMEOUT_SEC="${WAIT_TIMEOUT_SEC:-1200}"        # 20 min — 4B model load is slow
 
-WORKDIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." &> /dev/null && pwd)"
+WORKDIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
 cd "$WORKDIR"
 mkdir -p logs
 
@@ -74,8 +74,11 @@ trap cleanup EXIT
 echo "=== launching retrieval server (embed=$EMBED_SIZE) ==="
 (
     set -e
-    module load anaconda3/2024.6 2>/dev/null || true
+    set +u                 # conda's activate script touches PS1 etc; relax nounset.
+    module load anaconda3/2024.6
     conda activate "$RETRIEVER_CONDA_ENV"
+    set -u
+    echo "python: $(which python)"
     cd "$ARXIV_RETRIEVER_DIR"
     python src/arxiv_retriever/server/retrieval_server.py \
         --config "$RETRIEVAL_CONFIG" \
