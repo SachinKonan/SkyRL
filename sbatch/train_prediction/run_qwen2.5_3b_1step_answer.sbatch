@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-WORKDIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." &> /dev/null && pwd)"
+WORKDIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
 cd "$WORKDIR"
 mkdir -p logs/train_prediction
 
