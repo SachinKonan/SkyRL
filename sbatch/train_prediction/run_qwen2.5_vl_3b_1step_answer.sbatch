@@ -1,21 +1,22 @@
 #!/bin/bash
-# Qwen2.5-3B direct accept/reject — 1-step, no search. Plumbing smoke test on
+# Qwen2.5-VL-3B direct accept/reject — 1-step, no search. VL reads paper pages
+# as images and emits <answer>Accept|Reject</answer>. Plumbing smoke on
 # gpu-test (1 GPU-80, batch=2, 1-hour wall).
 #
-# Prereq — build the smoke parquets (32 rows, all 3 splits):
-#   python examples/train/search_arxiv/searchr1_arxiv_dataset.py \
-#       --output_dir /scratch/gpfs/ZHUANGL/sk7524/SkyRLMain/data/iclr_arxiv_text_smoke \
-#       --max_rows 32 --splits train validation test
+# Prereq — build the smoke parquets (8 rows, all 3 splits):
+#   python examples/train/search_arxiv/searchr1_arxiv_vl_dataset.py \
+#       --output_dir /scratch/gpfs/ZHUANGL/sk7524/SkyRLMain/data/iclr_arxiv_vl_smoke \
+#       --max_rows 8 --splits train validation test
 #
-#SBATCH --job-name=tp_1step_smoke
+#SBATCH --job-name=tp_vl_smoke
 #SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=120G
 #SBATCH --gres=gpu:1
 #SBATCH --constraint="gpu80"
 #SBATCH --partition=gpu-test
-#SBATCH --output=logs/train_prediction/1step_%j.out
-#SBATCH --error=logs/train_prediction/1step_%j.err
+#SBATCH --output=logs/train_prediction/vl_%j.out
+#SBATCH --error=logs/train_prediction/vl_%j.err
 
 set -euo pipefail
 
@@ -28,9 +29,9 @@ export TRANSFORMERS_OFFLINE=1
 export WANDB_MODE=offline
 export LOGURU_LEVEL=INFO
 
-DATA_DIR="${DATA_DIR_TEXT:-/scratch/gpfs/ZHUANGL/sk7524/SkyRLMain/data/iclr_arxiv_text_smoke}"
-MODEL_PATH="${MODEL_PATH:-Qwen/Qwen2.5-3B-Instruct}"
-RUN_NAME="${RUN_NAME:-tp_qwen2.5_3b_1step_smoke}"
+DATA_DIR="${DATA_DIR_VL:-/scratch/gpfs/ZHUANGL/sk7524/SkyRLMain/data/iclr_arxiv_vl_smoke}"
+MODEL_PATH="${MODEL_PATH:-Qwen/Qwen2.5-VL-3B-Instruct}"
+RUN_NAME="${RUN_NAME:-tp_qwen2.5_vl_3b_1step_smoke}"
 
 echo "=============================================="
 echo "Job:        $SLURM_JOB_ID"
@@ -40,7 +41,9 @@ echo "Model:      $MODEL_PATH"
 echo "Run name:   $RUN_NAME"
 echo "=============================================="
 
-uv run --isolated --frozen --extra fsdp -m skyrl.train.entrypoints.main_base \
+# main_vlm.py swaps the default SkyRLGymGenerator for SkyRLVLMGymGenerator so
+# image observations flow through the multi-modal path.
+uv run --isolated --frozen --extra fsdp python examples/train/search_arxiv/main_vlm.py \
   data.train_data="['${DATA_DIR}/train.parquet']" \
   data.val_data="['${DATA_DIR}/validation.parquet']" \
   trainer.algorithm.advantage_estimator=grpo \
