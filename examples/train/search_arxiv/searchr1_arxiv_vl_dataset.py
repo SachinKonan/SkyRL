@@ -39,17 +39,23 @@ def split_on_image_tokens(text: str) -> List[str]:
     return text.split("<image>")
 
 
+def _image_part(path: str) -> Dict[str, Any]:
+    """vLLM's chat endpoint accepts `image_url` with a file:// URI for local images."""
+    url = path if "://" in path else f"file://{path}"
+    return {"type": "image_url", "image_url": {"url": url}}
+
+
 def build_user_parts(text: str, images_abs: List[str]) -> List[Dict[str, Any]]:
     """
     Given human text with N <image> placeholders and N image paths, build the
-    Qwen-VL content-parts list:
-        [{"type":"image","image":path}, {"type":"text","text":chunk}, ...]
+    Qwen-VL content-parts list using the OpenAI-compatible schema vLLM expects:
+        [{"type":"image_url","image_url":{"url":"file://..."}},
+         {"type":"text","text":chunk}, ...]
     """
     chunks = split_on_image_tokens(text)
     n_placeholders = len(chunks) - 1
     if n_placeholders != len(images_abs):
-        # Mismatch: fall back to placing all images first, then the full text.
-        parts: List[Dict[str, Any]] = [{"type": "image", "image": p} for p in images_abs]
+        parts: List[Dict[str, Any]] = [_image_part(p) for p in images_abs]
         if text:
             parts.append({"type": "text", "text": text})
         return parts
@@ -58,7 +64,7 @@ def build_user_parts(text: str, images_abs: List[str]) -> List[Dict[str, Any]]:
     if chunks[0]:
         parts.append({"type": "text", "text": chunks[0]})
     for img_path, next_chunk in zip(images_abs, chunks[1:]):
-        parts.append({"type": "image", "image": img_path})
+        parts.append(_image_part(img_path))
         if next_chunk:
             parts.append({"type": "text", "text": next_chunk})
     return parts
