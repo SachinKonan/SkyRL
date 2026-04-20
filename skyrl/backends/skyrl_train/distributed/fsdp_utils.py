@@ -276,7 +276,9 @@ def _sync_non_persistent_buffers(model: torch.nn.Module, loaded_sd: dict):
             else:
                 src = torch.empty(buf.shape, dtype=buf.dtype, device="cuda")
             dist.broadcast(src, src=0)
-            module._buffers[key] = src.cpu()
+            # Keep on CUDA — moving to CPU here breaks ops like rotary embeddings
+            # whose other operands are on the model's device after FSDP wrapping.
+            module._buffers[key] = src
 
 
 # Fsdp2 load full state dict from `accelerate`
@@ -373,6 +375,19 @@ def fsdp2_load_full_state_dict(model: torch.nn.Module, full_sd: dict, cpu_offloa
 
     if not cpu_offload:
         load_fsdp2_model_to_gpu(model)
+    else:
+        # FSDP2's CPUOffloadPolicy moves *parameters* and gradients between CPU
+        # and GPU around forward/backward, but it does not touch non-persistent
+        # buffers (e.g. RotaryEmbedding's `inv_freq`). The unconditional offload
+        # above left those buffers on CPU; without this, the forward pass mixes
+        # CPU buffers with GPU params/inputs and crashes (cuda/cpu mismatch in
+        # the rotary matmul for VLMs and modern LLMs alike).
+        device = torch.cuda.current_device()
+        for module in model.modules():
+            for key in getattr(module, "_non_persistent_buffers_set", set()):
+                buf = module._buffers.get(key)
+                if buf is not None and buf.device.type != "cuda":
+                    module._buffers[key] = buf.to(device, non_blocking=True)
     return model
 
 

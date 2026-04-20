@@ -23,10 +23,17 @@ WORKDIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
 cd "$WORKDIR"
 mkdir -p logs/train_prediction
 
-export HF_HOME="${HF_HOME:-/scratch/gpfs/ZHUANGL/sk7524/hf}"
+SCRATCH_ROOT="${SCRATCH_ROOT:-/scratch/gpfs/ZHUANGL/sk7524}"
+export HF_HOME="${HF_HOME:-${SCRATCH_ROOT}/hf}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-${SCRATCH_ROOT}/hf}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${SCRATCH_ROOT}/hf/datasets}"
+export TORCH_HOME="${TORCH_HOME:-${SCRATCH_ROOT}/torch}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${SCRATCH_ROOT}/.cache}"
+export WANDB_DIR="${WANDB_DIR:-${SCRATCH_ROOT}/wandb}"
 export TRANSFORMERS_OFFLINE=1
 export WANDB_MODE=offline
 export LOGURU_LEVEL=INFO
+mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" "$WANDB_DIR"
 
 DATA_DIR="${DATA_DIR_TEXT:-/scratch/gpfs/ZHUANGL/sk7524/SkyRLMain/data/iclr_arxiv_text_smoke}"
 MODEL_PATH="${MODEL_PATH:-Qwen/Qwen2.5-3B-Instruct}"
@@ -40,7 +47,8 @@ echo "Model:      $MODEL_PATH"
 echo "Run name:   $RUN_NAME"
 echo "=============================================="
 
-uv run --isolated --frozen --extra fsdp -m skyrl.train.entrypoints.main_base \
+source .venv/bin/activate
+python -m skyrl.train.entrypoints.main_base \
   data.train_data="['${DATA_DIR}/train.parquet']" \
   data.val_data="['${DATA_DIR}/validation.parquet']" \
   trainer.algorithm.advantage_estimator=grpo \
@@ -69,7 +77,7 @@ uv run --isolated --frozen --extra fsdp -m skyrl.train.entrypoints.main_base \
   trainer.micro_forward_batch_size_per_gpu=1 \
   trainer.micro_train_batch_size_per_gpu=1 \
   trainer.max_prompt_length=24480 \
-  generator.max_input_length=28672 \
+  generator.max_input_length=24480 \
   generator.sampling_params.max_generate_length=4096 \
   generator.inference_engine.async_engine=true \
   generator.batched=false \
@@ -83,14 +91,15 @@ uv run --isolated --frozen --extra fsdp -m skyrl.train.entrypoints.main_base \
   environment.skyrl_gym.max_env_workers=4 \
   environment.skyrl_gym.search_arxiv.max_turns=1 \
   environment.skyrl_gym.search_arxiv.search_enabled=false \
-  trainer.logger=wandb \
+  trainer.logger=console \
   trainer.project_name=train-prediction \
   trainer.run_name="$RUN_NAME" \
   trainer.ckpt_interval=999999 \
   trainer.hf_save_interval=999999 \
   trainer.max_ckpts_to_keep=1 \
   trainer.resume_mode=latest \
-  trainer.ckpt_path="$HOME/ckpts/${RUN_NAME}" \
+  trainer.ckpt_path="${SCRATCH_ROOT}/ckpts/${RUN_NAME}" \
+  trainer.log_path="${SCRATCH_ROOT}/skyrl-logs" \
   trainer.eval_batch_size=2 \
   trainer.eval_before_train=false \
   trainer.eval_interval=999999 \
@@ -98,5 +107,5 @@ uv run --isolated --frozen --extra fsdp -m skyrl.train.entrypoints.main_base \
   generator.eval_sampling_params.top_p=1.0 \
   generator.eval_sampling_params.stop='["</answer>"]' \
   generator.eval_sampling_params.max_generate_length=4096 \
-  trainer.export_path="$HOME/ckpts/${RUN_NAME}/exports" \
+  trainer.export_path="${SCRATCH_ROOT}/ckpts/${RUN_NAME}/exports" \
   "$@"
