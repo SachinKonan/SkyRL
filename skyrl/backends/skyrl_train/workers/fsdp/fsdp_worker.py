@@ -171,6 +171,7 @@ class FSDPPolicyWorkerBase(PolicyWorkerBase):
             seed=self.cfg.seed,
             micro_train_batch_size_per_gpu=self.cfg.micro_train_batch_size_per_gpu,
             num_training_steps=num_training_steps,
+            save_optimizer_state=self.cfg.save_optimizer_state,
         )
         strategy.setup_distributed()
         self.strategy = strategy
@@ -353,6 +354,7 @@ class FSDPCriticWorkerBase(CriticWorkerBase):
             seed=self.cfg.seed,
             micro_train_batch_size_per_gpu=self.cfg.micro_train_batch_size_per_gpu,
             num_training_steps=num_training_steps,
+            save_optimizer_state=self.cfg.save_optimizer_state,
         )
         strategy.setup_distributed()
         self.strategy = strategy
