@@ -105,14 +105,17 @@ class HFModelWrapper(nn.Module):
             else:
                 nf4_config = None
 
-            if use_liger_kernel:
-                from liger_kernel.transformers import AutoLigerKernelForCausalLM
-
-                model_class = AutoLigerKernelForCausalLM
-            else:
-                model_class = AutoModelForCausalLM
+            model_class = AutoModelForCausalLM
 
             model_config = AutoConfig.from_pretrained(pretrain_or_model, trust_remote_code=True, **model_config_kwargs)
+
+            if use_liger_kernel:
+                from skyrl.backends.skyrl_train.model_utils import apply_liger_kernel
+
+                # Applies fused RMSNorm / RoPE / SwiGLU (family-dependent). For RL,
+                # fused_linear_cross_entropy is disabled so logits remain exposed
+                # for the policy gradient. Unknown model_types are logged and skipped.
+                apply_liger_kernel(model_config, is_trainable=True, require_logits=True)
 
             if language_model_only:
                 logger.info("[VLM] language_model_only=True, skipping vision encoder initialization")

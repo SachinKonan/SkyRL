@@ -51,6 +51,7 @@ source .venv/bin/activate
 python -m skyrl.train.entrypoints.main_base \
   data.train_data="['${DATA_DIR}/train.parquet']" \
   data.val_data="['${DATA_DIR}/validation.parquet']" \
+  trainer.use_liger_kernel=true \
   trainer.algorithm.advantage_estimator=grpo \
   trainer.policy.optimizer_config.lr=1.0e-6 \
   trainer.policy.optimizer_config.max_grad_norm=0.5 \
