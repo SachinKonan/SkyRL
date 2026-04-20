@@ -625,6 +625,10 @@ class TrainerConfig(BaseConfig):
     micro_forward_batch_size_per_gpu: int = 1
     update_ref_every_epoch: bool = False
     use_sample_packing: bool = True
+    use_liger_kernel: bool = False
+    """Apply liger-kernel fused kernels (RMSNorm / RoPE / SwiGLU) for supported families.
+    RL-safe: fused_linear_cross_entropy is disabled so logits remain exposed for the
+    policy gradient. Unsupported model_types are logged and skipped."""
     eval_batch_size: int = 1024
     eval_before_train: bool = True
     eval_interval: int = 5

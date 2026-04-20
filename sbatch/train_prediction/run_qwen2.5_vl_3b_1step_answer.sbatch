@@ -11,7 +11,7 @@
 #SBATCH --job-name=tp_vl_smoke
 #SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=120G
+#SBATCH --mem=200G
 #SBATCH --gres=gpu:1
 #SBATCH --constraint="gpu80"
 #SBATCH --partition=gpu-test
@@ -38,7 +38,7 @@ export _SKYRL_USE_NEW_INFERENCE=1  # required by SkyRLVLMGymGenerator (RemoteInf
 mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" "$WANDB_DIR"
 
 DATA_DIR="${DATA_DIR_VL:-/scratch/gpfs/ZHUANGL/sk7524/SkyRLMain/data/iclr_arxiv_vl_smoke}"
-MODEL_PATH="${MODEL_PATH:-/scratch/gpfs/ZHUANGL/sk7524/hf/hub/models--Qwen--Qwen3-VL-2B-Instruct/snapshots/89644892e4d85e24eaac8bacfd4f463576704203}"
+MODEL_PATH="${MODEL_PATH:-/scratch/gpfs/ZHUANGL/sk7524/hf/hub/models--Qwen--Qwen2.5-VL-3B-Instruct/snapshots/66285546d2b821cf421d4f5eb2576359d3770cd3}"
 RUN_NAME="${RUN_NAME:-tp_qwen2.5_vl_3b_1step_smoke}"
 
 echo "=============================================="
@@ -56,6 +56,7 @@ python examples/train/search_arxiv/main_vlm.py \
   data.train_data="['${DATA_DIR}/train.parquet']" \
   data.val_data="['${DATA_DIR}/validation.parquet']" \
   trainer.use_sample_packing=false \
+  trainer.use_liger_kernel=true \
   trainer.algorithm.advantage_estimator=grpo \
   trainer.policy.optimizer_config.lr=1.0e-6 \
   trainer.policy.optimizer_config.max_grad_norm=0.5 \
@@ -65,8 +66,9 @@ python examples/train/search_arxiv/main_vlm.py \
   trainer.policy.model.path="$MODEL_PATH" \
   trainer.placement.colocate_all=true \
   trainer.strategy=fsdp2 \
-  trainer.policy.fsdp_config.cpu_offload=false \
+  trainer.policy.fsdp_config.cpu_offload=true \
   trainer.ref.fsdp_config.cpu_offload=true \
+  trainer.gradient_checkpointing=true \
   trainer.placement.policy_num_gpus_per_node=1 \
   trainer.placement.ref_num_gpus_per_node=1 \
   generator.inference_engine.num_engines=1 \
