@@ -74,6 +74,7 @@ class FSDPStrategy(DistributedStrategy):
         seed: int = 42,
         micro_train_batch_size_per_gpu=1,
         num_training_steps: Optional[int] = None,
+        save_optimizer_state: bool = True,
     ) -> None:
         super().__init__()
         assert fsdp_strategy in ("fsdp", "fsdp2"), f"Unsupported FSDP strategy: {fsdp_strategy}"
@@ -81,6 +82,7 @@ class FSDPStrategy(DistributedStrategy):
         self.optimizer_config = optimizer_config
         self.model_config = model_config
         self.fsdp_strategy = fsdp_strategy
+        self.save_optimizer_state = save_optimizer_state
         self.max_norm = optimizer_config.max_grad_norm if optimizer_config is not None else 1.0
         self.micro_train_batch_size_per_gpu = micro_train_batch_size_per_gpu
         self.seed = seed
@@ -461,13 +463,20 @@ class FSDPStrategy(DistributedStrategy):
                     with io.open_file(model_path, "wb") as f:
                         torch.save(model_state_dict, f)
 
-                    # Get and save optimizer state dict if optimizer is provided
-                    optimizer_state_dict = {}
-                    if optimizer is not None:
+                    # Get and save optimizer state dict if optimizer is provided and
+                    # save_optimizer_state is enabled. Skipping the optim dump drops
+                    # ~2/3 of the ckpt size for Adam-based training (Adam state is 2x
+                    # the model weights in fp32); load path tolerates missing optim
+                    # shards via the `optim_exists` check below.
+                    if optimizer is not None and self.save_optimizer_state:
                         optimizer_state_dict = optimizer.state_dict()
-                    self.print(f"[rank-{rank}]: Saving optim to {optim_path}")
-                    with io.open_file(optim_path, "wb") as f:
-                        torch.save(optimizer_state_dict, f)
+                        self.print(f"[rank-{rank}]: Saving optim to {optim_path}")
+                        with io.open_file(optim_path, "wb") as f:
+                            torch.save(optimizer_state_dict, f)
+                    else:
+                        self.print(
+                            f"[rank-{rank}]: Skipping optim save (save_optimizer_state=False)"
+                        )
 
                     # Get scheduler state dict if scheduler is provided
                     lr_scheduler_state_dict = {}

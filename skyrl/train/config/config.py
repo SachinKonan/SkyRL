@@ -620,6 +620,10 @@ class TrainerConfig(BaseConfig):
     """Apply liger-kernel fused kernels (RMSNorm / RoPE / SwiGLU) for supported families.
     RL-safe: fused_linear_cross_entropy is disabled so logits remain exposed for the
     policy gradient. Unsupported model_types are logged and skipped."""
+    save_optimizer_state: bool = True
+    """If False, checkpoints skip the optimizer state dict (Adam moments). Resume loads
+    model weights only; Adam moments restart from zero. ~3x smaller ckpts for 7B+ models
+    -- useful on storage-constrained filesystems."""
     eval_batch_size: int = 1024
     eval_before_train: bool = True
     eval_interval: int = 5
