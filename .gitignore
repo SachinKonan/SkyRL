@@ -5,6 +5,10 @@ __pycache__/
 # hydra logs
 /outputs/
 /data/lcb
+/data/iclr_arxiv_text_smoke/
+/data/iclr_arxiv_vl_smoke/
+/data/iclr_arxiv_text/
+/data/iclr_arxiv_vl/
 
 # MkDocs build output (generated during build)
 docs/public/api-ref/
