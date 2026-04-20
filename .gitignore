@@ -8,7 +8,9 @@ __pycache__/
 /data/iclr_arxiv_text_smoke/
 /data/iclr_arxiv_vl_smoke/
 /data/iclr_arxiv_text/
+/data/iclr_arxiv_text_search/
 /data/iclr_arxiv_vl/
+/data/iclr_arxiv_vl_search/
 
 # MkDocs build output (generated during build)
 docs/public/api-ref/

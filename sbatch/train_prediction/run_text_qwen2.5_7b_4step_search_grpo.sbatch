@@ -34,7 +34,8 @@ export WANDB_MODE=offline
 export LOGURU_LEVEL=INFO
 mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" "$WANDB_DIR"
 
-DATA_DIR="${DATA_DIR_TEXT:-${SCRATCH_ROOT}/SkyRLMain/data/iclr_arxiv_text}"
+DATA_DIR="${DATA_DIR_TEXT:-${SCRATCH_ROOT}/SkyRLMain/data/iclr_arxiv_text_search}"
+# Build with: searchr1_arxiv_dataset.py --prompt_mode search --output_dir <DATA_DIR>
 MODEL_PATH="${MODEL_PATH:-${SCRATCH_ROOT}/hf/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28}"
 RUN_NAME="${RUN_NAME:-tp_text_7b_4step_search_grpo_${SLURM_JOB_ID}}"
 

@@ -24,10 +24,11 @@ import pandas as pd
 
 from searchr1_arxiv_dataset import (  # noqa: E402
     ICLR_UPPER_BOUND,
-    SYSTEM_CONTENT,
     extract_title,
     normalize_answer,
     parse_authors,
+    strip_user_preamble,
+    system_content_for_mode,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -75,6 +76,7 @@ def process_row(
     split: str,
     index: int,
     image_root: str,
+    prompt_mode: str = "nosearch",
 ) -> Optional[Dict[str, Any]]:
     conv = row.get("conversations") or []
     meta = row.get("_metadata") or {}
@@ -93,9 +95,12 @@ def process_row(
     year = meta.get("year")
     upper = ICLR_UPPER_BOUND.get(int(year)) if isinstance(year, (int, float, str)) and str(year).isdigit() else None
 
+    # Strip the LLaMA-Factory SFT preamble (conflicts with our <answer> grammar).
+    human_turn = strip_user_preamble(human_turn)
+
     # Arrow needs a single schema per nested column, so use content-parts for both turns.
     prompt = [
-        {"role": "system", "content": [{"type": "text", "text": SYSTEM_CONTENT}]},
+        {"role": "system", "content": [{"type": "text", "text": system_content_for_mode(prompt_mode)}]},
         {"role": "user", "content": build_user_parts(human_turn, images_abs)},
     ]
 
@@ -140,6 +145,12 @@ def main():
     ap.add_argument("--output_dir", default=DEFAULT_OUTPUT_DIR)
     ap.add_argument("--splits", nargs="+", default=["train", "validation", "test"])
     ap.add_argument("--max_rows", type=int, default=None)
+    ap.add_argument(
+        "--prompt_mode",
+        choices=["nosearch", "search"],
+        default="nosearch",
+        help="System prompt variant. 'nosearch' (default): review_roles only. 'search': + tool instructions.",
+    )
     args = ap.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -159,7 +170,7 @@ def main():
         rows = []
         dropped = 0
         for i, r in enumerate(data):
-            out = process_row(r, split, i, args.image_root)
+            out = process_row(r, split, i, args.image_root, prompt_mode=args.prompt_mode)
             if out is None:
                 dropped += 1
                 continue

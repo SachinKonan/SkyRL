@@ -34,19 +34,77 @@ import pandas as pd
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-SYSTEM_CONTENT = (
-    "You are an expert academic reviewer. For each ICLR paper you are given, "
-    "decide whether it was accepted or rejected. You may call arXiv retrieval tools "
-    "to gather context on related work before making your decision.\n\n"
-    "Tools:\n"
+_REVIEW_ROLES_PREAMBLE = """You are an academic reviewer assistant for the ICLR conference, tasked with evaluating research papers. Your task is to predict whether a paper will be accepted or rejected.
+ - Note: ICLR generally has a ~30% acceptance rate
+
+Simulate an OpenReview-review amongst three expert reviewers with distinct roles:
+- Reviewer 1 (Advocate): Find the strongest arguments FOR acceptance. What is novel, well-executed, or impactful about this work?
+- Reviewer 2 (Critic): Find the strongest arguments AGAINST acceptance. What are the weaknesses, missing baselines, overclaims, or lack of novelty?
+- Reviewer 3 (Calibrator): Compare this paper to typical ICLR papers at the accept/reject boundary. Is it above or below that bar?
+
+Each reviewer responds in two sentences to each of:
+1. The content and contribution of the paper
+2. Whether the investigation is executed well and the paper is high quality
+3. Whether the paper is novel w.r.t. existing work
+
+IMPORTANT GUIDELINES:
+- Reference specific elements of the paper: cite sections, figures, tables, equations, or quote key claims when making your arguments.
+- When claiming something is novel, explain WHY relative to specific prior work (e.g., "Unlike [method X] which does Y, this paper does Z because...").
+- When claiming a weakness, point to the specific missing experiment, flawed assumption, or unsupported claim.
+
+For calibration, here is how a similar panel evaluated two papers:
+
+ACCEPTED: "A Meta-Transfer Objective for Learning to Disentangle Causal Mechanisms"
+- Advocate highlighted a genuinely novel connection between transfer learning and causal inference, with strong theoretical grounding in independent mechanisms.
+- Critic noted limited scale of experiments but acknowledged the conceptual contribution was substantial.
+- Calibrator: clearly above the accept bar — introduces a new paradigm rather than incremental improvement.
+
+REJECTED: "Scalable Deep Neural Networks via Low-Rank Matrix Factorization"
+- Advocate noted practical utility of flexible model sizing after training and reasonable empirical results on standard benchmarks.
+- Critic argued SVD-based compression is well-studied, improvements over existing factorization methods are marginal, and no comparison to recent pruning approaches.
+- Calibrator: below the bar — addresses a real problem but lacks the novelty and rigor expected at a top venue.
+
+After the three reviews, you are the meta-reviewer. Weigh all perspectives carefully, considering both the Advocate's and Critic's arguments on their merits."""
+
+_ANSWER_INSTRUCTION_NOSEARCH = (
+    "\n\nOutput your final answer: <answer> \\boxed{Accept} </answer> or "
+    "<answer> \\boxed{Reject} </answer>."
+)
+
+_ANSWER_INSTRUCTION_SEARCH = (
+    "\n\nYou may call arXiv retrieval tools before answering:\n"
     "  <ssearch>your query</ssearch>  — semantic search over arXiv.\n"
     "  <asearch>lastname1,lastname2</asearch>  — author search (comma-separated last names).\n"
     "Retrieval results come back between <information> and </information>.\n\n"
-    "When ready, output exactly one of:\n"
-    "  <answer>Accept</answer>\n"
-    "  <answer>Reject</answer>\n"
-    "ICLR accepts roughly 30% of submissions."
+    "Output your final answer: <answer> \\boxed{Accept} </answer> or "
+    "<answer> \\boxed{Reject} </answer>."
 )
+
+# Preamble emitted by LLaMA-Factory's SFT dataset at the top of each user turn —
+# conflicts with our answer grammar ("\boxed{Accept}" as bare text, no <answer> tag).
+# Strip it verbatim so the user turn starts cleanly at the paper's "# TITLE".
+_LLAMAFACTORY_PREAMBLE = (
+    "I am giving you a paper. I want to predict its acceptance outcome at ICLR.\n"
+    " - Your answer will either be: \\boxed{Accept} or \\boxed{Reject}\n"
+    " - Note: ICLR generally has a ~30% acceptance rate\n\n"
+)
+
+
+def system_content_for_mode(prompt_mode: str) -> str:
+    if prompt_mode == "search":
+        return _REVIEW_ROLES_PREAMBLE + _ANSWER_INSTRUCTION_SEARCH
+    if prompt_mode == "nosearch":
+        return _REVIEW_ROLES_PREAMBLE + _ANSWER_INSTRUCTION_NOSEARCH
+    raise ValueError(f"Unknown prompt_mode: {prompt_mode}")
+
+
+def strip_user_preamble(user_turn: str) -> str:
+    """Remove the LLaMA-Factory \\boxed{...} preamble so only paper content remains."""
+    return user_turn.replace(_LLAMAFACTORY_PREAMBLE, "", 1).lstrip("\n")
+
+
+# Backward-compat: default prompt (used if a caller imports SYSTEM_CONTENT).
+SYSTEM_CONTENT = system_content_for_mode("nosearch")
 
 # Per-conference submission cutoff (papers uploaded after this date should be
 # hidden from retrieval). Approximate ICLR submission deadlines.
@@ -105,7 +163,7 @@ def normalize_answer(ans: Any) -> Optional[str]:
     return None
 
 
-def process_row(row: Dict[str, Any], split: str, index: int) -> Optional[Dict[str, Any]]:
+def process_row(row: Dict[str, Any], split: str, index: int, prompt_mode: str = "nosearch") -> Optional[Dict[str, Any]]:
     conv = row.get("conversations") or []
     meta = row.get("_metadata") or {}
 
@@ -122,12 +180,12 @@ def process_row(row: Dict[str, Any], split: str, index: int) -> Optional[Dict[st
     year = meta.get("year")
     upper = ICLR_UPPER_BOUND.get(int(year)) if isinstance(year, (int, float, str)) and str(year).isdigit() else None
 
-    # Replace the original "\boxed{Accept}" instruction wording with SkyRL's tag-based grammar.
-    # We keep the paper body unchanged; the system message instructs the model on the grammar.
-    user_content = human_turn
+    # Strip the LLaMA-Factory SFT preamble (mentions \boxed grammar as bare text,
+    # conflicts with our <answer>-wrapped form). System prompt carries the task framing.
+    user_content = strip_user_preamble(human_turn)
 
     prompt = [
-        {"role": "system", "content": SYSTEM_CONTENT},
+        {"role": "system", "content": system_content_for_mode(prompt_mode)},
         {"role": "user", "content": user_content},
     ]
 
@@ -156,7 +214,9 @@ def process_row(row: Dict[str, Any], split: str, index: int) -> Optional[Dict[st
     }
 
 
-def convert_split(input_json: str, output_parquet: str, split_name: str, max_rows: Optional[int]) -> int:
+def convert_split(
+    input_json: str, output_parquet: str, split_name: str, max_rows: Optional[int], prompt_mode: str = "nosearch"
+) -> int:
     logger.info(f"Loading {input_json}")
     with open(input_json, "r") as f:
         data = json.load(f)
@@ -166,7 +226,7 @@ def convert_split(input_json: str, output_parquet: str, split_name: str, max_row
     processed = []
     dropped = 0
     for i, row in enumerate(data):
-        out = process_row(row, split_name, i)
+        out = process_row(row, split_name, i, prompt_mode=prompt_mode)
         if out is None:
             dropped += 1
             continue
@@ -193,6 +253,13 @@ def main():
     ap.add_argument("--output_dir", default=DEFAULT_OUTPUT_DIR)
     ap.add_argument("--splits", nargs="+", default=["train", "validation", "test"])
     ap.add_argument("--max_rows", type=int, default=None)
+    ap.add_argument(
+        "--prompt_mode",
+        choices=["nosearch", "search"],
+        default="nosearch",
+        help="System prompt variant. 'nosearch' (default): review_roles only, no tool instructions. "
+        "'search': review_roles + <ssearch>/<asearch> tool instructions.",
+    )
     args = ap.parse_args()
 
     for split in args.splits:
@@ -201,7 +268,7 @@ def main():
         if not os.path.exists(in_path):
             logger.warning(f"skipping {split}: {in_path} not found")
             continue
-        convert_split(in_path, out_path, split, args.max_rows)
+        convert_split(in_path, out_path, split, args.max_rows, prompt_mode=args.prompt_mode)
 
 
 if __name__ == "__main__":
