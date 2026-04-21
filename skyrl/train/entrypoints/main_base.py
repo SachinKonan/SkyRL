@@ -476,9 +476,47 @@ def skyrl_entrypoint(cfg: SkyRLTrainConfig):
     exp.run()
 
 
+def _apply_slurm_job_overrides(cfg: SkyRLTrainConfig) -> None:
+    """Per-job-id runtime config overrides.
+
+    TODO(prompt-length): remove this block after jobs 7190283 (text 7B 1-step)
+    and 7190284 (VL-7B 1-step half-node) complete. Those jobs were submitted
+    with outdated max_prompt_length values baked into their Slurm snapshots
+    (24480 text / 49152 VL). The corrected value is 26480 -- matches
+    LLaMA-Factory's filtered24480 cutoff + ~2k headroom for our ~600-token
+    system prompt. Overriding here fixes the queued jobs at runtime without
+    needing to cancel + resubmit.
+    """
+    import os
+
+    job_id = os.environ.get("SLURM_JOB_ID", "")
+    overrides_by_job = {
+        "7190283": {"max_prompt_length": 26480},  # text 7B 1-step
+        "7190284": {"max_prompt_length": 26480},  # VL-7B 1-step half-node
+    }
+    if job_id not in overrides_by_job:
+        return
+    for field, new_value in overrides_by_job[job_id].items():
+        if field == "max_prompt_length":
+            old_trainer = cfg.trainer.max_prompt_length
+            old_gen = cfg.generator.max_input_length
+            cfg.trainer.max_prompt_length = new_value
+            cfg.generator.max_input_length = new_value
+            print(
+                f"[slurm-override] Job {job_id}: forced max_prompt_length "
+                f"{old_trainer}->{new_value}, max_input_length {old_gen}->{new_value}",
+                flush=True,
+            )
+
+
 def main() -> None:
     # Parse CLI args and build typed config
     cfg = SkyRLTrainConfig.from_cli_overrides(sys.argv[1:])
+
+    # Apply any SLURM_JOB_ID-keyed runtime overrides before validation -- this
+    # lets us correct fields baked into a queued job's Slurm snapshot without
+    # requiring cancel+resubmit. See _apply_slurm_job_overrides for the TODO.
+    _apply_slurm_job_overrides(cfg)
 
     # validate the arguments
     validate_cfg(cfg)

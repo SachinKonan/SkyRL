@@ -47,6 +47,13 @@ echo "Model:      $MODEL_PATH"
 echo "Run name:   $RUN_NAME"
 echo "=============================================="
 
+# Mirrors the production prompt-length trick: new default 26480 = LLaMA-Factory
+# filtered24480 + ~2k headroom for our system prompt. Kept as a variable so the
+# production sbatches can share the same shape.
+MAX_PROMPT_LEN=26480
+MAX_INPUT_LEN=$MAX_PROMPT_LEN
+echo "Prompt length budget: max_prompt_length=$MAX_PROMPT_LEN, max_input_length=$MAX_INPUT_LEN"
+
 source .venv/bin/activate
 python -m skyrl.train.entrypoints.main_base \
   data.train_data="['${DATA_DIR}/train.parquet']" \
@@ -77,8 +84,8 @@ python -m skyrl.train.entrypoints.main_base \
   trainer.policy_mini_batch_size=2 \
   trainer.micro_forward_batch_size_per_gpu=1 \
   trainer.micro_train_batch_size_per_gpu=1 \
-  trainer.max_prompt_length=24480 \
-  generator.max_input_length=24480 \
+  trainer.max_prompt_length=${MAX_PROMPT_LEN} \
+  generator.max_input_length=${MAX_INPUT_LEN} \
   generator.sampling_params.max_generate_length=4096 \
   generator.inference_engine.async_engine=true \
   generator.batched=false \

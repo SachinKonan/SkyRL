@@ -9,7 +9,7 @@ import sys
 import ray
 
 from skyrl.train.config import SkyRLTrainConfig
-from skyrl.train.entrypoints.main_base import BasePPOExp, validate_cfg
+from skyrl.train.entrypoints.main_base import BasePPOExp, _apply_slurm_job_overrides, validate_cfg
 from skyrl.train.utils import initialize_ray
 
 
@@ -33,6 +33,7 @@ def skyrl_entrypoint(cfg: SkyRLTrainConfig):
 
 def main() -> None:
     cfg = SkyRLTrainConfig.from_cli_overrides(sys.argv[1:])
+    _apply_slurm_job_overrides(cfg)
     validate_cfg(cfg)
     initialize_ray(cfg)
     ray.get(skyrl_entrypoint.remote(cfg))

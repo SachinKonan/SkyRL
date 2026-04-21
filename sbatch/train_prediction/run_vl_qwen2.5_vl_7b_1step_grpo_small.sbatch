@@ -55,6 +55,16 @@ echo "NUM_GPUS:    $NUM_GPUS"
 echo "=============================================="
 nvidia-smi
 
+# New default: 26480. Old 49152 was 2x what VL actually needs (LLaMA-Factory's
+# filtered24480 cutoff + ~2k headroom for our system prompt). VL has
+# use_sample_packing=false so every sequence pads to max_prompt_length --
+# halving this halves padding waste. A Python-side SLURM_JOB_ID override in
+# main_base.py forces 26480 for the queued jobs 7190283/7190284 whose Slurm
+# snapshot still has the old number.
+MAX_PROMPT_LEN=26480
+MAX_INPUT_LEN=$MAX_PROMPT_LEN
+echo "Prompt length budget: max_prompt_length=$MAX_PROMPT_LEN, max_input_length=$MAX_INPUT_LEN"
+
 source .venv/bin/activate
 
 # Batch-size fallback: if BS=256 OOMs we retry at 128, then 64. Mini-batch
@@ -114,8 +124,8 @@ for i in "${!BS_LIST[@]}"; do
       trainer.policy_mini_batch_size=${MINI} \
       trainer.micro_forward_batch_size_per_gpu=1 \
       trainer.micro_train_batch_size_per_gpu=1 \
-      trainer.max_prompt_length=49152 \
-      generator.max_input_length=49152 \
+      trainer.max_prompt_length=${MAX_PROMPT_LEN} \
+      generator.max_input_length=${MAX_INPUT_LEN} \
       generator.sampling_params.max_generate_length=4096 \
       generator.batched=false \
       generator.use_conversation_multi_turn=true \
