@@ -68,26 +68,47 @@ def compute_score(solution_str: str, ground_truth: dict, score: float = 1.0, for
 
 # --- Per-turn format scoring ----------------------------------------------
 
+_THINK_OPEN = "<think>"
 _THINK_CLOSE = "</think>"
 _ANSWER_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
-_BOXED_RE = re.compile(r"\\boxed\{[^}]*\}")
-_SSEARCH_RE = re.compile(r"<ssearch>.*?</ssearch>", re.DOTALL)
+_BOXED_RE = re.compile(r"\\boxed\{([^}]*)\}")
+_SSEARCH_RE = re.compile(r"<ssearch>(.*?)</ssearch>", re.DOTALL)
+_VALID_ANSWERS = frozenset({"accept", "reject"})
 
 
 def _turn_is_well_formatted(content: str, is_final: bool) -> bool:
-    """One assistant turn passes if it has `</think>` followed by the expected
-    action block. Final turn: `<answer>...\\boxed{X}...</answer>` with exactly
-    one `\\boxed{...}` inside. Intermediate turn: `<ssearch>...</ssearch>`.
+    """One assistant turn passes the structural check when ALL hold:
+
+    Common:
+      - Turn contains ``</think>``.
+      - The prefix before ``</think>`` (minus any opening ``<think>``) is non-empty
+        after stripping whitespace. Empty think blocks are disqualifying.
+
+    Final turn:
+      - The post-``</think>`` text contains ``<answer>...</answer>``.
+      - Inside the answer, exactly one ``\\boxed{...}`` appears.
+      - The contents of that ``\\boxed{...}`` normalize to ``accept`` or ``reject``.
+
+    Intermediate turn (multi-turn search only):
+      - The post-``</think>`` text contains ``<ssearch>...</ssearch>`` with a
+        non-empty query string inside (semantic_search takes a single str).
     """
     if _THINK_CLOSE not in content:
         return False
-    post = content.split(_THINK_CLOSE, 1)[1]
+    pre, post = content.split(_THINK_CLOSE, 1)
+    think_body = pre.split(_THINK_OPEN, 1)[1] if _THINK_OPEN in pre else pre
+    if not think_body.strip():
+        return False
     if is_final:
         m = _ANSWER_RE.search(post)
         if not m:
             return False
-        return len(_BOXED_RE.findall(m.group(1))) == 1
-    return bool(_SSEARCH_RE.search(post))
+        boxed = _BOXED_RE.findall(m.group(1))
+        if len(boxed) != 1:
+            return False
+        return boxed[0].strip().lower() in _VALID_ANSWERS
+    m = _SSEARCH_RE.search(post)
+    return bool(m and m.group(1).strip())
 
 
 def compute_format_score(chat_history: List[dict]) -> float:
