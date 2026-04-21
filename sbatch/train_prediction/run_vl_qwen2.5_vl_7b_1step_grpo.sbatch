@@ -55,6 +55,12 @@ echo "NUM_GPUS:    $NUM_GPUS"
 echo "=============================================="
 nvidia-smi
 
+# TODO(prompt-length): keep in sync with the half-node variant.
+# 26480 = LLaMA-Factory filtered24480 cutoff + ~2k for our system prompt.
+MAX_PROMPT_LEN=26480
+MAX_INPUT_LEN=$MAX_PROMPT_LEN
+echo "Prompt length budget: max_prompt_length=$MAX_PROMPT_LEN, max_input_length=$MAX_INPUT_LEN"
+
 source .venv/bin/activate
 
 # Batch-size fallback: if BS=256 OOMs we retry at 128, then 64. Mini-batch
@@ -114,8 +120,8 @@ for i in "${!BS_LIST[@]}"; do
       trainer.policy_mini_batch_size=${MINI} \
       trainer.micro_forward_batch_size_per_gpu=1 \
       trainer.micro_train_batch_size_per_gpu=1 \
-      trainer.max_prompt_length=49152 \
-      generator.max_input_length=49152 \
+      trainer.max_prompt_length=${MAX_PROMPT_LEN} \
+      generator.max_input_length=${MAX_INPUT_LEN} \
       generator.sampling_params.max_generate_length=4096 \
       generator.batched=false \
       generator.use_conversation_multi_turn=true \

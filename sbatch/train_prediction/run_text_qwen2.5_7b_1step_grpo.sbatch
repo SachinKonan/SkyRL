@@ -49,6 +49,15 @@ echo "Run name:   $RUN_NAME"
 echo "=============================================="
 nvidia-smi
 
+# New default: 26480 = LLaMA-Factory's filtered24480 cutoff + ~2k headroom for
+# our ~600-token system prompt (verified empirically: max observed text prompt
+# = 16723 tokens). A Python-side SLURM_JOB_ID override in main_base.py forces
+# this value for queued jobs 7190283/7190284 that were submitted with the old
+# number still baked into their Slurm snapshot.
+MAX_PROMPT_LEN=26480
+MAX_INPUT_LEN=$MAX_PROMPT_LEN
+echo "Prompt length budget: max_prompt_length=$MAX_PROMPT_LEN, max_input_length=$MAX_INPUT_LEN"
+
 source .venv/bin/activate
 python -m skyrl.train.entrypoints.main_base \
   data.train_data="['${DATA_DIR}/train.parquet']" \
@@ -85,8 +94,8 @@ python -m skyrl.train.entrypoints.main_base \
   trainer.policy_mini_batch_size=128 \
   trainer.micro_forward_batch_size_per_gpu=2 \
   trainer.micro_train_batch_size_per_gpu=2 \
-  trainer.max_prompt_length=24480 \
-  generator.max_input_length=24480 \
+  trainer.max_prompt_length=${MAX_PROMPT_LEN} \
+  generator.max_input_length=${MAX_INPUT_LEN} \
   generator.sampling_params.max_generate_length=4096 \
   generator.batched=false \
   generator.use_conversation_multi_turn=false \

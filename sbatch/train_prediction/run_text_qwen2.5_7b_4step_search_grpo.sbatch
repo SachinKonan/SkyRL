@@ -57,6 +57,13 @@ echo "Retrieval:   $RETRIEVAL_URL (embed=$EMBED_SIZE)"
 echo "=============================================="
 nvidia-smi
 
+# 3 search turns * (query + retrieval response ~1.5k tokens) + ~600-token system
+# prompt + paper content (median ~11k, p95 ~15k for Qwen2.5-7B). 32768 gives
+# comfortable headroom; drop to 26480 if we ever cap paper length more aggressively.
+MAX_PROMPT_LEN=32768
+MAX_INPUT_LEN=$MAX_PROMPT_LEN
+echo "Prompt length budget: max_prompt_length=$MAX_PROMPT_LEN, max_input_length=$MAX_INPUT_LEN"
+
 # --- retriever launch (conda, faiss-gpu) ---
 RETRIEVAL_PID=""
 cleanup() {
@@ -141,8 +148,8 @@ python -m skyrl.train.entrypoints.main_base \
   trainer.policy_mini_batch_size=128 \
   trainer.micro_forward_batch_size_per_gpu=2 \
   trainer.micro_train_batch_size_per_gpu=2 \
-  trainer.max_prompt_length=32768 \
-  generator.max_input_length=32768 \
+  trainer.max_prompt_length=${MAX_PROMPT_LEN} \
+  generator.max_input_length=${MAX_INPUT_LEN} \
   generator.sampling_params.max_generate_length=800 \
   generator.batched=false \
   generator.use_conversation_multi_turn=true \

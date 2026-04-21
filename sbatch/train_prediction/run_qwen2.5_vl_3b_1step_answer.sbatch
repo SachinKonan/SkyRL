@@ -49,6 +49,14 @@ echo "Model:      $MODEL_PATH"
 echo "Run name:   $RUN_NAME"
 echo "=============================================="
 
+# Mirrors the production prompt-length trick. NOTE: this smoke uses
+# Qwen3-VL-2B-Instruct, which may tokenize images differently than the
+# production Qwen2.5-VL-7B. If 26480 overflows (look for empty per-token
+# reward error in the log), bump here and investigate.
+MAX_PROMPT_LEN=26480
+MAX_INPUT_LEN=$MAX_PROMPT_LEN
+echo "Prompt length budget: max_prompt_length=$MAX_PROMPT_LEN, max_input_length=$MAX_INPUT_LEN"
+
 # main_vlm.py swaps the default SkyRLGymGenerator for SkyRLVLMGymGenerator so
 # image observations flow through the multi-modal path.
 source .venv/bin/activate
@@ -84,8 +92,8 @@ python examples/train/search_arxiv/main_vlm.py \
   trainer.policy_mini_batch_size=2 \
   trainer.micro_forward_batch_size_per_gpu=1 \
   trainer.micro_train_batch_size_per_gpu=1 \
-  trainer.max_prompt_length=49152 \
-  generator.max_input_length=49152 \
+  trainer.max_prompt_length=${MAX_PROMPT_LEN} \
+  generator.max_input_length=${MAX_INPUT_LEN} \
   generator.sampling_params.max_generate_length=4096 \
   generator.inference_engine.async_engine=true \
   generator.batched=false \
