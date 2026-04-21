@@ -34,50 +34,72 @@ import pandas as pd
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-_REVIEW_ROLES_PREAMBLE = """You are an academic reviewer assistant for the ICLR conference, tasked with evaluating research papers. Your task is to predict whether a paper will be accepted or rejected.
- - Note: ICLR generally has a ~30% acceptance rate
+_GENERIC_CORE = """Your response must include two parts:
 
-Simulate an OpenReview-review amongst three expert reviewers with distinct roles:
-- Reviewer 1 (Advocate): Find the strongest arguments FOR acceptance. What is novel, well-executed, or impactful about this work?
-- Reviewer 2 (Critic): Find the strongest arguments AGAINST acceptance. What are the weaknesses, missing baselines, overclaims, or lack of novelty?
-- Reviewer 3 (Calibrator): Compare this paper to typical ICLR papers at the accept/reject boundary. Is it above or below that bar?
+1. **Reasoning**: A detailed, free-flowing chain of thought enclosed in `<think>` and `</think>` tags.
+2. **Final Answer**: A clear, conversational explanation enclosed in `<answer>` and `</answer>` tags, with a concise final result enclosed in \\boxed{} notation if the question has a definitive answer.
 
-Each reviewer responds in two sentences to each of:
-1. The content and contribution of the paper
-2. Whether the investigation is executed well and the paper is high quality
-3. Whether the paper is novel w.r.t. existing work
+---
 
-IMPORTANT GUIDELINES:
-- Reference specific elements of the paper: cite sections, figures, tables, equations, or quote key claims when making your arguments.
-- When claiming something is novel, explain WHY relative to specific prior work (e.g., "Unlike [method X] which does Y, this paper does Z because...").
-- When claiming a weakness, point to the specific missing experiment, flawed assumption, or unsupported claim.
+### Reasoning Instructions
 
-For calibration, here is how a similar panel evaluated two papers:
+* The reasoning section must be inside `<think>` … `</think>` tags.
+* The reasoning should resemble a stream of consciousness: explore, test hypotheses, backtrack if necessary, reflect, and refine.
+* Let the reasoning flow naturally while progressing toward a conclusion.
+* Use reasoning strategies such as:
+  * **Planning** – outline possible angles of critique before committing.
+  * **Exploration** – consider multiple interpretations of the paper's contribution, rigor, and novelty, even unlikely ones.
+  * **Evaluation** – compare alternatives and verify against specific sections, figures, tables, equations, or claims.
+  * **Reflection** – revisit earlier judgments if new evidence arises.
+* {EXAMINE_LINE}
+* If the signal is ambiguous, make a reasonable inference based on venue norms (~30% acceptance rate).
+* End the reasoning once you are confident in the conclusion.
 
-ACCEPTED: "A Meta-Transfer Objective for Learning to Disentangle Causal Mechanisms"
-- Advocate highlighted a genuinely novel connection between transfer learning and causal inference, with strong theoretical grounding in independent mechanisms.
-- Critic noted limited scale of experiments but acknowledged the conceptual contribution was substantial.
-- Calibrator: clearly above the accept bar — introduces a new paradigm rather than incremental improvement.
+---
 
-REJECTED: "Scalable Deep Neural Networks via Low-Rank Matrix Factorization"
-- Advocate noted practical utility of flexible model sizing after training and reasonable empirical results on standard benchmarks.
-- Critic argued SVD-based compression is well-studied, improvements over existing factorization methods are marginal, and no comparison to recent pruning approaches.
-- Calibrator: below the bar — addresses a real problem but lacks the novelty and rigor expected at a top venue.
+### Final Answer Instructions
 
-After the three reviews, you are the meta-reviewer. Weigh all perspectives carefully, considering both the Advocate's and Critic's arguments on their merits."""
+* The answer section must be enclosed in `<answer>` … `</answer>` tags.
+* The `<answer>` section should stand on its own: it must provide necessary context, the paper's setup, and justification so that a reader can understand and verify the conclusion without reading `<think>`.
+  - Do NOT refer to the `<think>` section (avoid phrases like "as explained above" or "from the reasoning").
+  - Restate the paper's essential claim/method in words before delivering the verdict.
+* Default detail requirement: the `<answer>` must be a complete, readable review rather than a short summary.
+* Boxed result: include exactly one `\\boxed{Accept}` or `\\boxed{Reject}` at the end.
+* Consistency rule: The boxed value must match the conclusion supported by your explanation.
 
-_ANSWER_INSTRUCTION_NOSEARCH = (
-    "\n\nOutput your final answer: <answer> \\boxed{Accept} </answer> or "
-    "<answer> \\boxed{Reject} </answer>."
+---
+
+### Format Example
+
+<think>
+Detailed reasoning goes here...
+</think>
+<answer>
+Self-contained explanation with the paper's setup, strengths, weaknesses, and calibration against ICLR norms.
+Final verdict: \\boxed{Accept} or \\boxed{Reject}.
+</answer>"""
+
+_GENERIC_OPENER_TEXT = (
+    "You are an expert academic reviewer for the ICLR conference, predicting whether a paper "
+    "will be accepted or rejected. ICLR generally has a ~30% acceptance rate.\n\n"
+)
+_GENERIC_OPENER_VL = (
+    "You are an expert academic reviewer for the ICLR conference, predicting whether a paper "
+    "will be accepted or rejected. The paper is provided as page images. "
+    "ICLR generally has a ~30% acceptance rate.\n\n"
+)
+_EXAMINE_TEXT = "Thoroughly examine the paper's abstract, method, experiments, and related work before narrowing down."
+_EXAMINE_VL = (
+    "Thoroughly examine the abstract, figures, tables, equations, and prose across the page images before narrowing down."
 )
 
-_ANSWER_INSTRUCTION_SEARCH = (
-    "\n\nYou may call arXiv retrieval tools before answering:\n"
-    "  <ssearch>your query</ssearch>  — semantic search over arXiv.\n"
-    "  <asearch>lastname1,lastname2</asearch>  — author search (comma-separated last names).\n"
-    "Retrieval results come back between <information> and </information>.\n\n"
-    "Output your final answer: <answer> \\boxed{Accept} </answer> or "
-    "<answer> \\boxed{Reject} </answer>."
+_TOOL_USE_APPENDIX = (
+    "\n\n---\n\n"
+    "### Tool Use\n\n"
+    "Inside your reasoning you may call a semantic search over arXiv:\n"
+    "  <ssearch>your query</ssearch>\n"
+    "Retrieval results come back between <information> and </information>. "
+    "Use them to calibrate against prior work."
 )
 
 # Preamble emitted by LLaMA-Factory's SFT dataset at the top of each user turn —
@@ -90,12 +112,14 @@ _LLAMAFACTORY_PREAMBLE = (
 )
 
 
-def system_content_for_mode(prompt_mode: str) -> str:
-    if prompt_mode == "search":
-        return _REVIEW_ROLES_PREAMBLE + _ANSWER_INSTRUCTION_SEARCH
-    if prompt_mode == "nosearch":
-        return _REVIEW_ROLES_PREAMBLE + _ANSWER_INSTRUCTION_NOSEARCH
-    raise ValueError(f"Unknown prompt_mode: {prompt_mode}")
+def system_content_for_mode(prompt_mode: str, *, vl: bool = False) -> str:
+    if prompt_mode not in ("nosearch", "search"):
+        raise ValueError(f"Unknown prompt_mode: {prompt_mode}")
+    opener = _GENERIC_OPENER_VL if vl else _GENERIC_OPENER_TEXT
+    examine = _EXAMINE_VL if vl else _EXAMINE_TEXT
+    core = _GENERIC_CORE.replace("{EXAMINE_LINE}", examine)
+    tail = _TOOL_USE_APPENDIX if prompt_mode == "search" else ""
+    return opener + core + tail
 
 
 def strip_user_preamble(user_turn: str) -> str:

@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Union
 from omegaconf import DictConfig
 
 from skyrl_gym.envs.base_text_env import BaseTextEnv, BaseTextEnvStepOutput, ConversationType
-from skyrl_gym.envs.search_arxiv.utils import compute_score
+from skyrl_gym.envs.search_arxiv.utils import compute_format_score, compute_score
 from skyrl_gym.tools import SearchArxivToolGroup
 
 
@@ -34,6 +34,9 @@ class SearchArxivEnvConfig:
     timeout: int = 30
     max_turns: int = 3
     search_enabled: bool = True
+    format_weight: float = 0.2
+    """Weight (alpha) on the per-turn format reward. Final reward is
+    (1 - alpha) * R_acc + alpha * R_fmt."""
 
 
 class SearchArxivEnv(BaseTextEnv):
@@ -47,6 +50,7 @@ class SearchArxivEnv(BaseTextEnv):
         # max_turns: env_config default, overridable per-sample via extras.
         self.max_turns = int(extras.get("max_turns", env_config.max_turns))
         self.search_enabled = bool(extras.get("search_enabled", env_config.search_enabled))
+        self.format_weight = float(extras.get("format_weight", env_config.format_weight))
 
         self.tool_group = SearchArxivToolGroup(
             search_url=env_config.search_url,
@@ -64,23 +68,33 @@ class SearchArxivEnv(BaseTextEnv):
         self.chat_history: ConversationType = []
 
     _SEM_RE = re.compile(r"<ssearch>(.*?)</ssearch>", re.DOTALL)
-    _AUTH_RE = re.compile(r"<asearch>(.*?)</asearch>", re.DOTALL)
 
     def _parse_action(self, action: str):
-        """Return (tool_name, arg) or (None, None)."""
+        """Return (tool_name, arg) or (None, None).
+
+        Only <ssearch>…</ssearch> is parsed. Author-search (<asearch>) has been
+        retired — we don't want the model learning to shortcut via author match.
+        """
         sem = self._SEM_RE.search(action)
         if sem:
             return "semantic_search", sem.group(1).strip()
-        auth = self._AUTH_RE.search(action)
-        if auth:
-            return "author_search", auth.group(1).strip()
         return None, None
 
     def _get_reward(self, done: bool) -> float:
+        """R = (1 - alpha) * R_acc + alpha * R_fmt on done, else 0.
+
+        R_acc: EM over \\boxed{Accept|Reject} inside the final <answer> block.
+        R_fmt: fraction of assistant turns that pass the structure check
+        (</think> + <answer>...\\boxed{X}...</answer> on the final turn,
+        </think> + <ssearch>...</ssearch> on intermediate turns).
+        """
         if not done:
             return 0.0
         chat_str = "".join(item["content"] for item in self.chat_history)
-        return compute_score(chat_str, self.ground_truth)
+        acc = compute_score(chat_str, self.ground_truth)
+        fmt = compute_format_score(self.chat_history)
+        alpha = self.format_weight
+        return (1.0 - alpha) * acc + alpha * fmt
 
     def _is_done(self, action: str) -> bool:
         if self.turns >= self.max_turns:

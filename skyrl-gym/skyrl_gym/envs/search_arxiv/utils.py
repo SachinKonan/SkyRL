@@ -8,7 +8,7 @@ in a \\boxed{} marker. We also accept a bare ``\\boxed{...}`` anywhere as a fall
 """
 
 import re
-from typing import Optional
+from typing import List, Optional
 
 
 def extract_boxed_answer(solution_str: str) -> Optional[str]:
@@ -64,3 +64,41 @@ def compute_score(solution_str: str, ground_truth: dict, score: float = 1.0, for
     if em_check(answer, target):
         return score
     return format_score
+
+
+# --- Per-turn format scoring ----------------------------------------------
+
+_THINK_CLOSE = "</think>"
+_ANSWER_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
+_BOXED_RE = re.compile(r"\\boxed\{[^}]*\}")
+_SSEARCH_RE = re.compile(r"<ssearch>.*?</ssearch>", re.DOTALL)
+
+
+def _turn_is_well_formatted(content: str, is_final: bool) -> bool:
+    """One assistant turn passes if it has `</think>` followed by the expected
+    action block. Final turn: `<answer>...\\boxed{X}...</answer>` with exactly
+    one `\\boxed{...}` inside. Intermediate turn: `<ssearch>...</ssearch>`.
+    """
+    if _THINK_CLOSE not in content:
+        return False
+    post = content.split(_THINK_CLOSE, 1)[1]
+    if is_final:
+        m = _ANSWER_RE.search(post)
+        if not m:
+            return False
+        return len(_BOXED_RE.findall(m.group(1))) == 1
+    return bool(_SSEARCH_RE.search(post))
+
+
+def compute_format_score(chat_history: List[dict]) -> float:
+    """Fraction of assistant turns that pass the per-turn format check.
+    Single-turn runs collapse to {0.0, 1.0}; multi-turn yields k/N.
+    """
+    turns = [m["content"] for m in chat_history if m.get("role") == "assistant"]
+    if not turns:
+        return 0.0
+    final_idx = len(turns) - 1
+    ok = sum(
+        1 for i, content in enumerate(turns) if _turn_is_well_formatted(content, is_final=(i == final_idx))
+    )
+    return ok / len(turns)

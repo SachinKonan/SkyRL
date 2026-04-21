@@ -100,7 +100,7 @@ def process_row(
 
     # Arrow needs a single schema per nested column, so use content-parts for both turns.
     prompt = [
-        {"role": "system", "content": [{"type": "text", "text": system_content_for_mode(prompt_mode)}]},
+        {"role": "system", "content": [{"type": "text", "text": system_content_for_mode(prompt_mode, vl=True)}]},
         {"role": "user", "content": build_user_parts(human_turn, images_abs)},
     ]
 
