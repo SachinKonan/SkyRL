@@ -22,3 +22,4 @@ search_arxiv:
   timeout: 30
   max_turns: 3
   search_enabled: true
+  format_weight: 0.2  # alpha in R = (1-alpha)*R_acc + alpha*R_fmt
