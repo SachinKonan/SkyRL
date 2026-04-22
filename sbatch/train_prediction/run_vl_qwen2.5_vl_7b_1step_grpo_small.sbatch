@@ -61,7 +61,7 @@ nvidia-smi
 # halving this halves padding waste. A Python-side SLURM_JOB_ID override in
 # main_base.py forces 26480 for the queued jobs 7190283/7190284 whose Slurm
 # snapshot still has the old number.
-MAX_PROMPT_LEN=26480
+MAX_PROMPT_LEN=36864
 MAX_INPUT_LEN=$MAX_PROMPT_LEN
 echo "Prompt length budget: max_prompt_length=$MAX_PROMPT_LEN, max_input_length=$MAX_INPUT_LEN"
 

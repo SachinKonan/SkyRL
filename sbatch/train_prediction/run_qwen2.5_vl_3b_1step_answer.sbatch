@@ -53,7 +53,7 @@ echo "=============================================="
 # Qwen3-VL-2B-Instruct, which may tokenize images differently than the
 # production Qwen2.5-VL-7B. If 26480 overflows (look for empty per-token
 # reward error in the log), bump here and investigate.
-MAX_PROMPT_LEN=26480
+MAX_PROMPT_LEN=36864
 MAX_INPUT_LEN=$MAX_PROMPT_LEN
 echo "Prompt length budget: max_prompt_length=$MAX_PROMPT_LEN, max_input_length=$MAX_INPUT_LEN"
 

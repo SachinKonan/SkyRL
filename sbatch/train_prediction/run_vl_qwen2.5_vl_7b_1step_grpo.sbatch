@@ -57,7 +57,7 @@ nvidia-smi
 
 # TODO(prompt-length): keep in sync with the half-node variant.
 # 26480 = LLaMA-Factory filtered24480 cutoff + ~2k for our system prompt.
-MAX_PROMPT_LEN=26480
+MAX_PROMPT_LEN=36864
 MAX_INPUT_LEN=$MAX_PROMPT_LEN
 echo "Prompt length budget: max_prompt_length=$MAX_PROMPT_LEN, max_input_length=$MAX_INPUT_LEN"
 
