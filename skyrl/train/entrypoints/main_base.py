@@ -480,8 +480,8 @@ def _apply_slurm_job_overrides(cfg: SkyRLTrainConfig) -> None:
 
     job_id = os.environ.get("SLURM_JOB_ID", "")
     overrides_by_job = {
-        "7190283": {"max_prompt_length": 26480},  # text 7B 1-step
-        "7190284": {"max_prompt_length": 26480},  # VL-7B 1-step half-node
+        "7190283": {"max_prompt_length": 26480},  # text 7B 1-step (text caps at ~17k tokens)
+        "7190284": {"max_prompt_length": 36864},  # VL-7B 1-step half-node (VL p99 ~30,800 tokens)
     }
     if job_id not in overrides_by_job:
         return
