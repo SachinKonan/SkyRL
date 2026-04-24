@@ -41,9 +41,31 @@ def split_on_image_tokens(text: str) -> List[str]:
 
 
 def _image_part(path: str) -> Dict[str, Any]:
-    """vLLM's chat endpoint accepts `image_url` with a file:// URI for local images."""
-    url = path if "://" in path else f"file://{path}"
-    return {"type": "image_url", "image_url": {"url": url}}
+    """Encode image as base64 data URI so vLLM's render endpoint populates
+    mm_kwargs in the features response. The file:// URL path returns only
+    mm_placeholders + mm_hashes (Phase 1 disagg API) with no pixel data, which
+    leaves <|image_pad|> tokens unfilled and produces gibberish output. Proven
+    via the working Geometry-3K VLM example (nithinvc/SkyRL f83573cf).
+
+    Reads raw file bytes; no PIL decode/re-encode (PNG source stays PNG).
+    """
+    import base64
+
+    if path.startswith("data:"):
+        return {"type": "image_url", "image_url": {"url": path}}
+
+    local_path = path[len("file://"):] if path.startswith("file://") else path
+    lower = local_path.lower()
+    if lower.endswith((".jpg", ".jpeg")):
+        mime = "jpeg"
+    elif lower.endswith(".webp"):
+        mime = "webp"
+    else:
+        mime = "png"
+    with open(local_path, "rb") as f:
+        raw = f.read()
+    b64 = base64.b64encode(raw).decode("ascii")
+    return {"type": "image_url", "image_url": {"url": f"data:image/{mime};base64,{b64}"}}
 
 
 def build_user_parts(text: str, images_abs: List[str]) -> List[Dict[str, Any]]:
@@ -167,7 +189,31 @@ def main():
         if args.max_rows is not None:
             data = data[: args.max_rows]
 
+        # Stream-write to parquet in chunks to avoid holding all base64-encoded
+        # images in memory at once (OOM with 21k rows × ~3.6MB/row ≈ 76GB + overhead).
+        # Schema is fixed from the first chunk; subsequent chunks are cast to it so
+        # pyarrow's per-chunk inference doesn't produce mismatches (e.g. a chunk where
+        # image_url happens to be all-None would infer a null type instead of struct).
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        CHUNK_SIZE = 512
+
+        def _flush(rows_batch, writer_ref):
+            if not rows_batch:
+                return writer_ref
+            df = pd.DataFrame(rows_batch)
+            if writer_ref is None:
+                table = pa.Table.from_pandas(df, preserve_index=False)
+                writer_ref = pq.ParquetWriter(out_path, table.schema)
+            else:
+                table = pa.Table.from_pandas(df, schema=writer_ref.schema, preserve_index=False, safe=False)
+            writer_ref.write_table(table)
+            return writer_ref
+
+        writer = None
         rows = []
+        kept = 0
         dropped = 0
         for i, r in enumerate(data):
             out = process_row(r, split, i, args.image_root, prompt_mode=args.prompt_mode)
@@ -175,8 +221,15 @@ def main():
                 dropped += 1
                 continue
             rows.append(out)
-        logger.info(f"  kept {len(rows)}, dropped {dropped}")
-        pd.DataFrame(rows).to_parquet(out_path, index=False)
+            kept += 1
+            if len(rows) >= CHUNK_SIZE:
+                writer = _flush(rows, writer)
+                rows.clear()
+        writer = _flush(rows, writer)
+        rows.clear()
+        if writer is not None:
+            writer.close()
+        logger.info(f"  kept {kept}, dropped {dropped}")
         logger.info(f"  wrote {out_path}")
 
 
