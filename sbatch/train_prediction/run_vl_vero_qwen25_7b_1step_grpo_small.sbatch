@@ -147,7 +147,7 @@ for i in "${!BS_LIST[@]}"; do
       trainer.project_name=train-prediction \
       trainer.run_name="$RUN_NAME" \
       trainer.ckpt_interval=5 \
-      trainer.hf_save_interval=20 \
+      trainer.hf_save_interval=999999 \
       trainer.max_ckpts_to_keep=2 \
       trainer.resume_mode=latest \
       trainer.ckpt_path="${SCRATCH_ROOT}/ckpts/${RUN_NAME}" \
