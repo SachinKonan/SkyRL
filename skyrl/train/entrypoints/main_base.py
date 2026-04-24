@@ -494,6 +494,7 @@ def _apply_slurm_job_overrides(cfg: SkyRLTrainConfig) -> None:
             "hf_save_interval": 999999,     # prevent HF-save OOM (see docstring)
         },
         "7307929": {
+            "max_prompt_length": 36864,     # Vero-Qwen25-7B VL (same VL token budget as 7190284)
             "hf_save_interval": 999999,     # Vero-Qwen25-7B VL: same HF-save guard
         },
     }
