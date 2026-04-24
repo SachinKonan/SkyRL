@@ -426,6 +426,10 @@ class WorkerDispatch:
             self.broadcast_to_inference_engines(self._inference_engine_client)
             self.finish_weight_sync()
             await self._inference_engine_client.wake_up(tags=["kv_cache"])
+            # vllm issue #17103: sleep/wake populates the KV cache with
+            # placeholder content that corrupts the first batch (produces
+            # gibberish for VL). Reset after the kv_cache wake to flush it.
+            await self._inference_engine_client.reset_prefix_cache()
         else:
             # Non-colocated: pause generation to prevent in-flight requests from
             # reading partially-updated weights during the NCCL broadcast.

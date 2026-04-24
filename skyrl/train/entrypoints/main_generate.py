@@ -28,6 +28,12 @@ class EvalOnlyEntrypoint(BasePPOExp):
         assert self.eval_dataset is not None, "The evaluation only entrypoint requires an eval dataset is provided"
 
         await inference_engine_client.wake_up()
+        # Reset prefix cache to avoid gibberish output bug (vllm issue #17103).
+        # The cache is populated during sleep/wake with placeholder content and
+        # corrupts the first real batch without this reset. Ported from
+        # SkyRLSearchEnvs skyrl-train/skyrl_train/entrypoints/main_generate.py.
+        if self.cfg.trainer.placement.colocate_all:
+            await inference_engine_client.reset_prefix_cache()
         generator = self.get_generator(self.cfg, self.tokenizer, inference_engine_client)
 
         results: dict[str, Any] = await evaluate(
