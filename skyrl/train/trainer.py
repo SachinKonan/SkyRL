@@ -211,6 +211,12 @@ class RayPPOTrainer:
         self.global_step += 1  # start training at global_step 1
         for epoch in range(start_epoch, self.cfg.trainer.epochs):
             for _, rand_prompts in enumerate(self.train_dataloader):
+                # Curriculum hook: tell a step-aware sampler the current global
+                # step so the next batch draws against the right gamma. No-op
+                # for samplers that don't define set_step (e.g. default shuffle).
+                _sampler = getattr(self.train_dataloader, "sampler", None)
+                if _sampler is not None and hasattr(_sampler, "set_step"):
+                    _sampler.set_step(self.global_step)
                 with Timer("step", self.all_timings):
                     # for colocate_all=true, inference engine is always on GPU when starting the training step
 

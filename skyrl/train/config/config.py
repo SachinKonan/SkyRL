@@ -329,6 +329,19 @@ class OffPolicyCorrectionConfig(BaseConfig):
 
 
 @dataclass
+class CurriculumConfig(BaseConfig):
+    """Difficulty curriculum: per-batch mix between an "easy" subset of the
+    train data (rows where `extra_info.is_easy=True`) and the full distribution.
+    Sampling probability for the easy pool follows a cosine half-cycle from
+    `gamma_start` at step 0 to `gamma_end` at `decay_steps` (then stays at
+    `gamma_end`)."""
+    enabled: bool = False
+    gamma_start: float = 1.0
+    gamma_end: float = 0.0
+    decay_steps: int = 50
+
+
+@dataclass
 class AlgorithmConfig(BaseConfig):
     advantage_estimator: str = "grpo"
     """``"grpo"``, ``"gae"``, ``"rloo"``, ``"reinforce++"``, or custom via ``AdvantageEstimatorRegistry``."""
@@ -382,6 +395,10 @@ class AlgorithmConfig(BaseConfig):
     max_seq_len: Optional[int] = None
     """Used for ``seq_mean_token_sum_norm`` loss reduction.
     Must be set explicitly for that reduction mode; otherwise can remain ``None``."""
+    curriculum: CurriculumConfig = field(default_factory=CurriculumConfig)
+    """Difficulty-mixing sampler that biases early batches toward easy
+    (clear-Accept / clear-Reject) prompts and decays toward uniform sampling
+    over the full distribution."""
 
 
 # ---------------------------------------------------------------------------

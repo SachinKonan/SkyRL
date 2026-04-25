@@ -770,10 +770,51 @@ def build_dataloader(
     seeded_generator = torch.Generator()
     seeded_generator.manual_seed(cfg.trainer.seed)
 
+    # Optional curriculum sampler (training only): samples each index from the
+    # "easy" subset (extra_info.is_easy=True) with probability gamma(step) and
+    # from the full dataset with probability (1 - gamma). Trainer must call
+    # sampler.set_step(global_step) before each batch dispatch.
+    sampler = None
+    use_curriculum = (
+        is_train
+        and getattr(cfg.trainer.algorithm, "curriculum", None) is not None
+        and bool(getattr(cfg.trainer.algorithm.curriculum, "enabled", False))
+    )
+    if use_curriculum:
+        from skyrl.train.dataset.curriculum_sampler import CurriculumSampler
+
+        # Read is_easy tag from each row's extra_info. PromptDataset stores rows
+        # in self.dataframe (an HF datasets.Dataset).
+        df = getattr(dataset, "dataframe", None)
+        if df is None:
+            raise ValueError("CurriculumSampler requires PromptDataset with .dataframe attribute")
+        easy_mask = [bool(row.get("extra_info", {}).get("is_easy", False)) for row in df]
+        easy_indices = [i for i, ok in enumerate(easy_mask) if ok]
+        full_indices = list(range(len(df)))
+        logger.info(
+            f"CurriculumSampler: easy={len(easy_indices)}/{len(full_indices)} "
+            f"({100*len(easy_indices)/max(1,len(full_indices)):.1f}%)"
+        )
+        # Match the default StatefulDataLoader sample budget (= len(dataset))
+        # so per-epoch step count is unchanged from shuffle-only mode.
+        # batch_size is passed so the sampler enforces within-batch index
+        # uniqueness (compute_prompt_mini_batch_boundaries asserts this).
+        sampler = CurriculumSampler(
+            full_indices=full_indices,
+            easy_indices=easy_indices,
+            num_samples=len(full_indices),
+            batch_size=batch_size if not is_fully_async else 1,
+            gamma_start=cfg.trainer.algorithm.curriculum.gamma_start,
+            gamma_end=cfg.trainer.algorithm.curriculum.gamma_end,
+            decay_steps=cfg.trainer.algorithm.curriculum.decay_steps,
+            seed=cfg.trainer.seed,
+        )
+
     dataloader = StatefulDataLoader(
         dataset,
         batch_size=batch_size if not is_fully_async else 1,
-        shuffle=True if is_train else False,
+        shuffle=(True if (is_train and sampler is None) else False),
+        sampler=sampler,
         collate_fn=dataset.collate_fn,
         # TODO(Charlie): debug why inference http endpoint is slow when num_workers is 8
         num_workers=0 if cfg.generator.inference_engine.enable_http_endpoint else 8,
