@@ -117,6 +117,13 @@ def process_row(
     year = meta.get("year")
     upper = ICLR_UPPER_BOUND.get(int(year)) if isinstance(year, (int, float, str)) and str(year).isdigit() else None
 
+    pct_rating = float(meta.get("pct_rating", 0.5))
+    raw_decision = (meta.get("decision") or "").strip().lower()
+    accept_decisions = {"accept", "poster", "spotlight", "oral"}
+    is_easy = (raw_decision == "reject" and pct_rating < 0.4) or (
+        raw_decision in accept_decisions and pct_rating > 0.6
+    )
+
     # Strip the LLaMA-Factory SFT preamble (conflicts with our <answer> grammar).
     human_turn = strip_user_preamble(human_turn)
 
@@ -126,7 +133,12 @@ def process_row(
         {"role": "user", "content": build_user_parts(human_turn, images_abs)},
     ]
 
-    reward_spec = {"ground_truth": {"target": [target]}}
+    reward_spec = {
+        "ground_truth": {
+            "target": [target],
+            "pct_rating": pct_rating,
+        }
+    }
     extra_info = {
         "index": index,
         "split": split,
@@ -138,6 +150,8 @@ def process_row(
         "year": year,
         "authors_last_names": parse_authors(meta.get("authors")),
         "num_images": len(images_abs),
+        "pct_rating": pct_rating,
+        "is_easy": is_easy,
     }
 
     return {
@@ -169,9 +183,11 @@ def main():
     ap.add_argument("--max_rows", type=int, default=None)
     ap.add_argument(
         "--prompt_mode",
-        choices=["nosearch", "search"],
+        choices=["nosearch", "search", "nosearch_rating", "search_rating"],
         default="nosearch",
-        help="System prompt variant. 'nosearch' (default): review_roles only. 'search': + tool instructions.",
+        help="System prompt variant. 'nosearch' (default): \\boxed{Accept|Reject} prompt. "
+        "'search': + tool instructions. "
+        "'*_rating': model emits \\boxed{X.XX} rating in [0,1] instead.",
     )
     args = ap.parse_args()
 

@@ -22,7 +22,11 @@ from typing import Any, Dict, List, Optional, Union
 from omegaconf import DictConfig
 
 from skyrl_gym.envs.base_text_env import BaseTextEnv, BaseTextEnvStepOutput, ConversationType
-from skyrl_gym.envs.search_arxiv.utils import compute_format_score, compute_score
+from skyrl_gym.envs.search_arxiv.utils import (
+    compute_format_score,
+    compute_rating_score,
+    compute_score,
+)
 from skyrl_gym.tools import SearchArxivToolGroup
 
 
@@ -37,6 +41,11 @@ class SearchArxivEnvConfig:
     format_weight: float = 0.2
     """Weight (alpha) on the per-turn format reward. Final reward is
     (1 - alpha) * R_acc + alpha * R_fmt."""
+    reward_mode: str = "binary"
+    """`"binary"` (default): R_acc is EM over `\\boxed{Accept|Reject}`.
+    `"rating"`: model emits `\\boxed{X.XX}` (continuous rating in [0,1]) and
+    R_acc = 1 - |predicted - pct_rating|, where `pct_rating` is read from
+    `extras["reward_spec"]["ground_truth"]["pct_rating"]`."""
 
 
 class SearchArxivEnv(BaseTextEnv):
@@ -51,6 +60,7 @@ class SearchArxivEnv(BaseTextEnv):
         self.max_turns = int(extras.get("max_turns", env_config.max_turns))
         self.search_enabled = bool(extras.get("search_enabled", env_config.search_enabled))
         self.format_weight = float(extras.get("format_weight", env_config.format_weight))
+        self.reward_mode = str(extras.get("reward_mode", getattr(env_config, "reward_mode", "binary")))
 
         self.tool_group = SearchArxivToolGroup(
             search_url=env_config.search_url,
@@ -83,16 +93,25 @@ class SearchArxivEnv(BaseTextEnv):
     def _get_reward(self, done: bool) -> float:
         """R = (1 - alpha) * R_acc + alpha * R_fmt on done, else 0.
 
-        R_acc: EM over \\boxed{Accept|Reject} inside the final <answer> block.
-        R_fmt: fraction of assistant turns that pass the structure check
-        (</think> + <answer>...\\boxed{X}...</answer> on the final turn,
-        </think> + <ssearch>...</ssearch> on intermediate turns).
+        Binary mode (default):
+          R_acc: EM over \\boxed{Accept|Reject} inside the final <answer> block.
+        Rating mode (`reward_mode="rating"`):
+          R_acc = 1 - |predicted - pct_rating| where the model emits
+          \\boxed{X.XX} as its final boxed answer.
+
+        R_fmt: fraction of assistant turns that pass the structure check.
+        Final-turn pattern depends on `reward_mode`: "boxed_label" for binary,
+        "rating" for rating mode.
         """
         if not done:
             return 0.0
         chat_str = "".join(item["content"] for item in self.chat_history)
-        acc = compute_score(chat_str, self.ground_truth)
-        fmt = compute_format_score(self.chat_history)
+        if self.reward_mode == "rating":
+            acc = compute_rating_score(chat_str, self.ground_truth)
+            fmt = compute_format_score(self.chat_history, final_token_pattern="rating")
+        else:
+            acc = compute_score(chat_str, self.ground_truth)
+            fmt = compute_format_score(self.chat_history, final_token_pattern="boxed_label")
         alpha = self.format_weight
         return (1.0 - alpha) * acc + alpha * fmt
 

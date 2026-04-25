@@ -8,6 +8,10 @@ __pycache__/
 # tight to the project root so example data directories in the repo aren't
 # accidentally excluded.
 /data/
+# Ignore all of /ckpts/ (model checkpoints, GB-scale, never belong in git).
+/ckpts/
+# Local skyrl-logs sink (shard exports + per-run logs).
+/skyrl-logs/
 
 # MkDocs build output (generated during build)
 docs/public/api-ref/

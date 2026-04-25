@@ -102,6 +102,56 @@ _TOOL_USE_APPENDIX = (
     "Use them to calibrate against prior work."
 )
 
+# Rating-prompt variant: model emits a continuous 2-decimal-place confidence in
+# [0.00, 1.00] inside \boxed{}. Reward is distance-based (1 - |pred - target|),
+# so borderline papers still produce a meaningful gradient.
+_GENERIC_RATING_CORE = """Your response must include two parts:
+
+1. **Reasoning**: A detailed, free-flowing chain of thought enclosed in `<think>` and `</think>` tags.
+2. **Final Answer**: A clear, conversational explanation enclosed in `<answer>` and `</answer>` tags, ending with a 2-decimal-place rating in \\boxed{} notation.
+
+---
+
+### Reasoning Instructions
+
+* The reasoning section must be inside `<think>` … `</think>` tags.
+* The reasoning should resemble a stream of consciousness: explore, test hypotheses, backtrack if necessary, reflect, and refine.
+* Let the reasoning flow naturally while progressing toward a calibrated rating.
+* Use reasoning strategies such as:
+  * **Planning** – outline possible angles of critique before committing.
+  * **Exploration** – consider multiple interpretations of the paper's contribution, rigor, and novelty.
+  * **Evaluation** – compare alternatives and verify against specific sections, figures, tables, equations, or claims.
+  * **Reflection** – revisit earlier judgments if new evidence arises.
+* {EXAMINE_LINE}
+* End the reasoning once you are confident in your rating.
+
+---
+
+### Final Answer Instructions
+
+* The answer section must be enclosed in `<answer>` … `</answer>` tags.
+* The `<answer>` section should stand on its own: it must provide necessary context, the paper's setup, and justification so that a reader can understand and verify the conclusion without reading `<think>`.
+  - Do NOT refer to the `<think>` section.
+  - Restate the paper's essential claim/method in words before delivering the rating.
+* End the `<answer>` with exactly one rating in `\\boxed{X.XX}` notation, where X.XX is a 2-decimal-place number in [0.00, 1.00] representing your confidence the paper would be accepted at ICLR:
+  - **0.00** = certain reject
+  - **0.50** = unable to predict / borderline
+  - **1.00** = certain accept
+  - Calibration anchor: ICLR has ~30% acceptance rate, so the average paper would rate around 0.30.
+* Use exactly 2 decimal places (e.g. `\\boxed{0.72}`, not `\\boxed{0.7}` or `\\boxed{0.723}`).
+
+---
+
+### Format Example
+
+<think>
+Detailed reasoning goes here, weighing strengths and weaknesses against ICLR norms...
+</think>
+<answer>
+Self-contained explanation with the paper's setup, strengths, weaknesses, and calibration.
+Final rating: \\boxed{0.62}.
+</answer>"""
+
 # Preamble emitted by LLaMA-Factory's SFT dataset at the top of each user turn —
 # conflicts with our answer grammar ("\boxed{Accept}" as bare text, no <answer> tag).
 # Strip it verbatim so the user turn starts cleanly at the paper's "# TITLE".
@@ -113,12 +163,13 @@ _LLAMAFACTORY_PREAMBLE = (
 
 
 def system_content_for_mode(prompt_mode: str, *, vl: bool = False) -> str:
-    if prompt_mode not in ("nosearch", "search"):
+    if prompt_mode not in ("nosearch", "search", "nosearch_rating", "search_rating"):
         raise ValueError(f"Unknown prompt_mode: {prompt_mode}")
     opener = _GENERIC_OPENER_VL if vl else _GENERIC_OPENER_TEXT
     examine = _EXAMINE_VL if vl else _EXAMINE_TEXT
-    core = _GENERIC_CORE.replace("{EXAMINE_LINE}", examine)
-    tail = _TOOL_USE_APPENDIX if prompt_mode == "search" else ""
+    core_template = _GENERIC_RATING_CORE if prompt_mode.endswith("_rating") else _GENERIC_CORE
+    core = core_template.replace("{EXAMINE_LINE}", examine)
+    tail = _TOOL_USE_APPENDIX if prompt_mode in ("search", "search_rating") else ""
     return opener + core + tail
 
 
@@ -204,6 +255,17 @@ def process_row(row: Dict[str, Any], split: str, index: int, prompt_mode: str = 
     year = meta.get("year")
     upper = ICLR_UPPER_BOUND.get(int(year)) if isinstance(year, (int, float, str)) and str(year).isdigit() else None
 
+    # Continuous rating in [0,1]; defaults to 0.5 (borderline) if missing so the
+    # rating-reward path produces a near-zero gradient on unlabeled rows.
+    pct_rating = float(meta.get("pct_rating", 0.5))
+    # "Easy" curriculum tag: clear-Accept (pct_rating > 0.6) or clear-Reject
+    # (pct_rating < 0.4). The CurriculumSampler reads this from extra_info.
+    raw_decision = (meta.get("decision") or "").strip().lower()
+    accept_decisions = {"accept", "poster", "spotlight", "oral"}
+    is_easy = (raw_decision == "reject" and pct_rating < 0.4) or (
+        raw_decision in accept_decisions and pct_rating > 0.6
+    )
+
     # Strip the LLaMA-Factory SFT preamble (mentions \boxed grammar as bare text,
     # conflicts with our <answer>-wrapped form). System prompt carries the task framing.
     user_content = strip_user_preamble(human_turn)
@@ -213,7 +275,12 @@ def process_row(row: Dict[str, Any], split: str, index: int, prompt_mode: str = 
         {"role": "user", "content": user_content},
     ]
 
-    reward_spec = {"ground_truth": {"target": [target]}}
+    reward_spec = {
+        "ground_truth": {
+            "target": [target],
+            "pct_rating": pct_rating,
+        }
+    }
 
     extra_info = {
         "index": index,
@@ -225,6 +292,8 @@ def process_row(row: Dict[str, Any], split: str, index: int, prompt_mode: str = 
         "submission_id": meta.get("submission_id"),
         "year": year,
         "authors_last_names": parse_authors(meta.get("authors")),
+        "pct_rating": pct_rating,
+        "is_easy": is_easy,
     }
 
     return {
@@ -279,10 +348,11 @@ def main():
     ap.add_argument("--max_rows", type=int, default=None)
     ap.add_argument(
         "--prompt_mode",
-        choices=["nosearch", "search"],
+        choices=["nosearch", "search", "nosearch_rating", "search_rating"],
         default="nosearch",
-        help="System prompt variant. 'nosearch' (default): review_roles only, no tool instructions. "
-        "'search': review_roles + <ssearch>/<asearch> tool instructions.",
+        help="System prompt variant. 'nosearch' (default): generic <think>/<answer>/\\boxed{Accept|Reject} prompt. "
+        "'search': adds <ssearch> tool instructions. "
+        "'nosearch_rating' / 'search_rating': model emits a 2-decimal-place rating \\boxed{X.XX} in [0,1] instead.",
     )
     args = ap.parse_args()
 
