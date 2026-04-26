@@ -57,13 +57,14 @@ MAX_PROMPT_LEN=36864
 MAX_INPUT_LEN=$MAX_PROMPT_LEN
 echo "Prompt length budget: max_prompt_length=$MAX_PROMPT_LEN, max_input_length=$MAX_INPUT_LEN"
 
-# main_vlm.py swaps the default SkyRLGymGenerator for SkyRLVLMGymGenerator so
-# image observations flow through the multi-modal path.
+# Use the canonical main_base.py + generator.vision_language_generator=true
+# path; BasePPOExp.get_generator dispatches to SkyRLVLMGymGenerator.
 source .venv/bin/activate
-python examples/train/search_arxiv/main_vlm.py \
+python -m skyrl.train.entrypoints.main_base \
   data.train_data="['${DATA_DIR}/train.parquet']" \
   data.val_data="['${DATA_DIR}/validation.parquet']" \
   trainer.use_sample_packing=false \
+  generator.vision_language_generator=true \
   trainer.use_liger_kernel=true \
   trainer.algorithm.advantage_estimator=grpo \
   trainer.policy.optimizer_config.lr=1.0e-6 \
