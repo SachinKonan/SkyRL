@@ -222,6 +222,11 @@ class BasePPOExp:
     def get_generator(self, cfg, tokenizer, inference_engine_client):
         """Initializes the generator.
 
+        Returns SkyRLVLMGymGenerator when ``cfg.generator.vision_language_generator=True``
+        (multi-modal text+image rollouts), else the default SkyRLGymGenerator.
+        Both classes share the same constructor signature so this is a pure
+        dispatch swap.
+
         Returns:
             GeneratorInterface: The generator.
         """

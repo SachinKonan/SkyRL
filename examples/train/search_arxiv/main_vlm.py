@@ -2,6 +2,12 @@
 VLM entrypoint for search_arxiv training. Swaps the default SkyRLGymGenerator
 for SkyRLVLMGymGenerator so image observations flow through the multi-modal
 path.
+
+NOTE: as of the `vision_language_generator` config flag, the equivalent runtime
+behavior is achievable by calling main_base.py with
+``generator.vision_language_generator=true`` -- BasePPOExp.get_generator now
+dispatches on that flag. This module is kept for backward compatibility with
+the working VL smoke sbatch; new sbatches can prefer the main_base.py route.
 """
 
 import sys

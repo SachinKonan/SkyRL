@@ -516,6 +516,10 @@ class GeneratorConfig(BaseConfig):
     inference_engine: InferenceEngineConfig = field(default_factory=InferenceEngineConfig)
     n_samples_per_prompt: int = 5
     batched: bool = False
+    vision_language_generator: bool = False
+    """If True, BasePPOExp.get_generator returns SkyRLVLMGymGenerator (multi-modal
+    text+image rollouts) instead of the default SkyRLGymGenerator. Pattern ported
+    from nithinvc/SkyRL f83573cf."""
     max_turns: int = 1
     max_input_length: Optional[int] = None
     """Max generator input length for multi-turn conversations. For single-turn, set equal to ``max_prompt_length``."""
