@@ -4,13 +4,10 @@ __pycache__/
 **/*.egg-info/
 # hydra logs
 /outputs/
-/data/lcb
-/data/iclr_arxiv_text_smoke/
-/data/iclr_arxiv_vl_smoke/
-/data/iclr_arxiv_text/
-/data/iclr_arxiv_text_search/
-/data/iclr_arxiv_vl/
-/data/iclr_arxiv_vl_search/
+# Ignore all of /data/ (regenerated artifacts; too big for git). Keep rule
+# tight to the project root so example data directories in the repo aren't
+# accidentally excluded.
+/data/
 
 # MkDocs build output (generated during build)
 docs/public/api-ref/

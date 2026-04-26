@@ -466,22 +466,37 @@ def skyrl_entrypoint(cfg: SkyRLTrainConfig):
 
 
 def _apply_slurm_job_overrides(cfg: SkyRLTrainConfig) -> None:
-    """Per-job-id runtime config overrides.
+    """Per-job-id runtime config overrides for already-queued jobs.
 
-    TODO(prompt-length): remove this block after jobs 7190283 (text 7B 1-step)
-    and 7190284 (VL-7B 1-step half-node) complete. Those jobs were submitted
-    with outdated max_prompt_length values baked into their Slurm snapshots
-    (24480 text / 49152 VL). The corrected value is 26480 -- matches
-    LLaMA-Factory's filtered24480 cutoff + ~2k headroom for our ~600-token
-    system prompt. Overriding here fixes the queued jobs at runtime without
-    needing to cancel + resubmit.
+    Slurm snapshots the sbatch at submit time, so fields baked into a PENDING
+    job don't pick up later edits. This block lets us fix those fields at
+    runtime without needing to cancel + resubmit (which loses queue position).
+
+    Active overrides:
+      * 7190283 -- COMPLETE (OOM at step 40). Listed here for history; no-op.
+      * 7190284 -- VL-7B 1-step half-node. max_prompt_length was 49152 in the
+        sbatch snapshot; real max is 36864. Also forces hf_save_interval=999999
+        to disable mid-training HF saves (prior text run OOMed during the FSDP
+        full-weight gather at step 40, so we skip in-training HF export and
+        rely on the lightweight FSDP shard ckpts).
+      * 7307929 -- Vero-Qwen25-7B VL (submitted after base64 fix but with
+        hf_save_interval=20 in the snapshot). Same HF-save override.
+
+    Remove entries once the corresponding job finishes.
     """
     import os
 
     job_id = os.environ.get("SLURM_JOB_ID", "")
     overrides_by_job = {
-        "7190283": {"max_prompt_length": 26480},  # text 7B 1-step (text caps at ~17k tokens)
-        "7190284": {"max_prompt_length": 36864},  # VL-7B 1-step half-node (VL p99 ~30,800 tokens)
+        "7190283": {"max_prompt_length": 26480},  # text 7B 1-step (already done)
+        "7190284": {
+            "max_prompt_length": 36864,     # VL-7B 1-step half-node (VL p99 ~30,800 tokens)
+            "hf_save_interval": 999999,     # prevent HF-save OOM (see docstring)
+        },
+        "7307929": {
+            "max_prompt_length": 36864,     # Vero-Qwen25-7B VL (same VL token budget as 7190284)
+            "hf_save_interval": 999999,     # Vero-Qwen25-7B VL: same HF-save guard
+        },
     }
     if job_id not in overrides_by_job:
         return
@@ -494,6 +509,14 @@ def _apply_slurm_job_overrides(cfg: SkyRLTrainConfig) -> None:
             print(
                 f"[slurm-override] Job {job_id}: forced max_prompt_length "
                 f"{old_trainer}->{new_value}, max_input_length {old_gen}->{new_value}",
+                flush=True,
+            )
+        elif field == "hf_save_interval":
+            old = cfg.trainer.hf_save_interval
+            cfg.trainer.hf_save_interval = new_value
+            print(
+                f"[slurm-override] Job {job_id}: forced hf_save_interval {old}->{new_value} "
+                f"(disable mid-training HF save; rely on shard ckpts)",
                 flush=True,
             )
 

@@ -112,7 +112,7 @@ python -m skyrl.train.entrypoints.main_base \
   trainer.project_name=train-prediction \
   trainer.run_name="$RUN_NAME" \
   trainer.ckpt_interval=10 \
-  trainer.hf_save_interval=40 \
+  trainer.hf_save_interval=999999 \
   trainer.max_ckpts_to_keep=2 \
   trainer.resume_mode=latest \
   trainer.ckpt_path="${SCRATCH_ROOT}/ckpts/${RUN_NAME}" \

@@ -1,20 +1,24 @@
 #!/bin/bash
-# Production: Qwen2.5-VL-7B-Instruct GRPO, 1-step direct answer (no search).
-# FULL-NODE on ailab: 8 x H200 + 1300G RAM + 64 CPU cores, 24h wall.
+# Production: zlab-princeton/Vero-Qwen25-7B (VL) GRPO, 1-step direct answer.
+# HALF-NODE on ailab: 4 x H200 + 600G RAM + 32 CPU cores, 24h wall.
 # Weights-only checkpoints. Batch-size fallback 256 -> 128 -> 64 on OOM.
+#
+# Vero-Qwen25-7B is a Qwen2.5-VL-7B architecture checkpoint from zlab-princeton
+# (same arch/tokenizer/image_token_id as Qwen2.5-VL-7B-Instruct, just different
+# starting weights). Stored in float32; cast to bf16 at load via model_dtype.
 #
 # Prereq (one-time on login node):
 #   .venv/bin/python examples/train/search_arxiv/searchr1_arxiv_vl_dataset.py \
 #       --output_dir /scratch/gpfs/ZHUANGL/sk7524/SkyRLMain/data/iclr_arxiv_vl \
 #       --splits train validation test
 #
-#SBATCH --job-name=tp_vl_7b_1step_grpo
+#SBATCH --job-name=tp_vl_vero_7b_1step_grpo_small
 #SBATCH --partition=ailab
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=64
-#SBATCH --mem=1300G
-#SBATCH --gres=gpu:8
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=600G
+#SBATCH --gres=gpu:4
 #SBATCH --time=24:00:00
 #SBATCH --output=logs/train_prediction/vl_1step_%j.out
 #SBATCH --error=logs/train_prediction/vl_1step_%j.err
@@ -38,10 +42,10 @@ export LOGURU_LEVEL=INFO
 export _SKYRL_USE_NEW_INFERENCE=1   # required by SkyRLVLMGymGenerator
 mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" "$WANDB_DIR"
 
-NUM_GPUS="${NUM_GPUS:-8}"
+NUM_GPUS="${NUM_GPUS:-4}"
 DATA_DIR="${DATA_DIR_VL:-${SCRATCH_ROOT}/SkyRLMain/data/iclr_arxiv_vl}"
-MODEL_PATH="${MODEL_PATH:-${SCRATCH_ROOT}/hf/hub/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/cc594898137f460bfe9f0759e9844b3ce807cfb5}"
-RUN_NAME="${RUN_NAME:-tp_vl_7b_1step_grpo_${SLURM_JOB_ID}}"
+MODEL_PATH="${MODEL_PATH:-${SCRATCH_ROOT}/hf/hub/models--zlab-princeton--Vero-Qwen25-7B/snapshots/180e84be5acb2aa887cf51015b84b6a6e453ee90}"
+RUN_NAME="${RUN_NAME:-tp_vl_vero_7b_1step_grpo_small_${SLURM_JOB_ID}}"
 RUN_LOG_DIR="${SCRATCH_ROOT}/skyrl-logs/${RUN_NAME}"
 mkdir -p "$RUN_LOG_DIR"
 
@@ -55,8 +59,12 @@ echo "NUM_GPUS:    $NUM_GPUS"
 echo "=============================================="
 nvidia-smi
 
-# TODO(prompt-length): keep in sync with the half-node variant.
-# 26480 = LLaMA-Factory filtered24480 cutoff + ~2k for our system prompt.
+# New default: 26480. Old 49152 was 2x what VL actually needs (LLaMA-Factory's
+# filtered24480 cutoff + ~2k headroom for our system prompt). VL has
+# use_sample_packing=false so every sequence pads to max_prompt_length --
+# halving this halves padding waste. A Python-side SLURM_JOB_ID override in
+# main_base.py forces 26480 for the queued jobs 7190283/7190284 whose Slurm
+# snapshot still has the old number.
 MAX_PROMPT_LEN=36864
 MAX_INPUT_LEN=$MAX_PROMPT_LEN
 echo "Prompt length budget: max_prompt_length=$MAX_PROMPT_LEN, max_input_length=$MAX_INPUT_LEN"
