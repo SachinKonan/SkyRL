@@ -5,7 +5,7 @@
 #
 # Prereq (one-time on login node):
 #   .venv/bin/python examples/train/search_arxiv/searchr1_arxiv_vl_dataset.py \
-#       --output_dir /scratch/gpfs/ZHUANGL/sk7524/SkyRLMain/data/iclr_arxiv_vl \
+#       --output_dir /scratch/gpfs/ZHUANGL/sk7524/SkyRLMain/data/iclr_arxiv_vl_file \
 #       --splits train validation test
 #
 #SBATCH --job-name=tp_vl_7b_1step_grpo
@@ -39,7 +39,7 @@ export _SKYRL_USE_NEW_INFERENCE=1   # required by SkyRLVLMGymGenerator
 mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" "$WANDB_DIR"
 
 NUM_GPUS="${NUM_GPUS:-8}"
-DATA_DIR="${DATA_DIR_VL:-${SCRATCH_ROOT}/SkyRLMain/data/iclr_arxiv_vl}"
+DATA_DIR="${DATA_DIR_VL:-${SCRATCH_ROOT}/SkyRLMain/data/iclr_arxiv_vl_file}"
 MODEL_PATH="${MODEL_PATH:-${SCRATCH_ROOT}/hf/hub/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/cc594898137f460bfe9f0759e9844b3ce807cfb5}"
 RUN_NAME="${RUN_NAME:-tp_vl_7b_1step_grpo_${SLURM_JOB_ID}}"
 RUN_LOG_DIR="${SCRATCH_ROOT}/skyrl-logs/${RUN_NAME}"

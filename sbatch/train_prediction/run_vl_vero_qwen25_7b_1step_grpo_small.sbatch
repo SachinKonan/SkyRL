@@ -9,8 +9,10 @@
 #
 # Prereq (one-time on login node):
 #   .venv/bin/python examples/train/search_arxiv/searchr1_arxiv_vl_dataset.py \
-#       --output_dir /scratch/gpfs/ZHUANGL/sk7524/SkyRLMain/data/iclr_arxiv_vl \
+#       --output_dir /scratch/gpfs/ZHUANGL/sk7524/SkyRLMain/data/iclr_arxiv_vl_file \
 #       --splits train validation test
+# (default emits file:// URIs -- ~30MB total parquet vs ~120GB inline base64.
+# Avoids pyarrow chunked-nested-struct decode bug that killed 7307929.)
 #
 #SBATCH --job-name=tp_vl_vero_7b_1step_grpo_small
 #SBATCH --partition=ailab
@@ -43,7 +45,7 @@ export _SKYRL_USE_NEW_INFERENCE=1   # required by SkyRLVLMGymGenerator
 mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" "$WANDB_DIR"
 
 NUM_GPUS="${NUM_GPUS:-4}"
-DATA_DIR="${DATA_DIR_VL:-${SCRATCH_ROOT}/SkyRLMain/data/iclr_arxiv_vl}"
+DATA_DIR="${DATA_DIR_VL:-${SCRATCH_ROOT}/SkyRLMain/data/iclr_arxiv_vl_file}"
 MODEL_PATH="${MODEL_PATH:-${SCRATCH_ROOT}/hf/hub/models--zlab-princeton--Vero-Qwen25-7B/snapshots/180e84be5acb2aa887cf51015b84b6a6e453ee90}"
 RUN_NAME="${RUN_NAME:-tp_vl_vero_7b_1step_grpo_small_${SLURM_JOB_ID}}"
 RUN_LOG_DIR="${SCRATCH_ROOT}/skyrl-logs/${RUN_NAME}"
