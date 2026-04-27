@@ -40,21 +40,29 @@ def split_on_image_tokens(text: str) -> List[str]:
     return text.split("<image>")
 
 
-def _image_part(path: str) -> Dict[str, Any]:
-    """Encode image as base64 data URI so vLLM's render endpoint populates
-    mm_kwargs in the features response. The file:// URL path returns only
-    mm_placeholders + mm_hashes (Phase 1 disagg API) with no pixel data, which
-    leaves <|image_pad|> tokens unfilled and produces gibberish output. Proven
-    via the working Geometry-3K VLM example (nithinvc/SkyRL f83573cf).
+def _image_part(path: str, inline_base64: bool = False) -> Dict[str, Any]:
+    """Build an image content-part for the OpenAI-style chat schema.
 
-    Reads raw file bytes; no PIL decode/re-encode (PNG source stays PNG).
+    Two encodings:
+      - inline_base64=False (default): emit ``{"url": "file:///abs/path"}``.
+        100x smaller parquet (no inline image bytes) and avoids a pyarrow
+        chunked-nested-struct decode bug that fires on multi-GB columns. The
+        inference-engine sbatch must pass
+        ``engine_init_kwargs.allowed_local_media_path=<root>`` so vLLM is
+        permitted to fetch the file.
+      - inline_base64=True: legacy path that embeds the raw image bytes as a
+        ``data:image/...;base64,...`` URI. Bloats the parquet (~3-4 MB/image),
+        but keeps everything self-contained.
     """
-    import base64
-
     if path.startswith("data:"):
         return {"type": "image_url", "image_url": {"url": path}}
 
     local_path = path[len("file://"):] if path.startswith("file://") else path
+    if not inline_base64:
+        return {"type": "image_url", "image_url": {"url": f"file://{os.path.abspath(local_path)}"}}
+
+    import base64
+
     lower = local_path.lower()
     if lower.endswith((".jpg", ".jpeg")):
         mime = "jpeg"
@@ -68,7 +76,7 @@ def _image_part(path: str) -> Dict[str, Any]:
     return {"type": "image_url", "image_url": {"url": f"data:image/{mime};base64,{b64}"}}
 
 
-def build_user_parts(text: str, images_abs: List[str]) -> List[Dict[str, Any]]:
+def build_user_parts(text: str, images_abs: List[str], inline_base64: bool = False) -> List[Dict[str, Any]]:
     """
     Given human text with N <image> placeholders and N image paths, build the
     Qwen-VL content-parts list using the OpenAI-compatible schema vLLM expects:
@@ -78,7 +86,7 @@ def build_user_parts(text: str, images_abs: List[str]) -> List[Dict[str, Any]]:
     chunks = split_on_image_tokens(text)
     n_placeholders = len(chunks) - 1
     if n_placeholders != len(images_abs):
-        parts: List[Dict[str, Any]] = [_image_part(p) for p in images_abs]
+        parts: List[Dict[str, Any]] = [_image_part(p, inline_base64=inline_base64) for p in images_abs]
         if text:
             parts.append({"type": "text", "text": text})
         return parts
@@ -87,7 +95,7 @@ def build_user_parts(text: str, images_abs: List[str]) -> List[Dict[str, Any]]:
     if chunks[0]:
         parts.append({"type": "text", "text": chunks[0]})
     for img_path, next_chunk in zip(images_abs, chunks[1:]):
-        parts.append(_image_part(img_path))
+        parts.append(_image_part(img_path, inline_base64=inline_base64))
         if next_chunk:
             parts.append({"type": "text", "text": next_chunk})
     return parts
@@ -99,6 +107,7 @@ def process_row(
     index: int,
     image_root: str,
     prompt_mode: str = "nosearch",
+    inline_base64: bool = False,
 ) -> Optional[Dict[str, Any]]:
     conv = row.get("conversations") or []
     meta = row.get("_metadata") or {}
@@ -123,7 +132,7 @@ def process_row(
     # Arrow needs a single schema per nested column, so use content-parts for both turns.
     prompt = [
         {"role": "system", "content": [{"type": "text", "text": system_content_for_mode(prompt_mode, vl=True)}]},
-        {"role": "user", "content": build_user_parts(human_turn, images_abs)},
+        {"role": "user", "content": build_user_parts(human_turn, images_abs, inline_base64=inline_base64)},
     ]
 
     reward_spec = {"ground_truth": {"target": [target]}}
@@ -173,6 +182,12 @@ def main():
         default="nosearch",
         help="System prompt variant. 'nosearch' (default): review_roles only. 'search': + tool instructions.",
     )
+    ap.add_argument(
+        "--inline_base64",
+        action="store_true",
+        help="Inline image bytes as data:image/...;base64,... URIs (default: emit file:// URIs, requires "
+        "engine_init_kwargs.allowed_local_media_path on the train side).",
+    )
     args = ap.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -216,7 +231,14 @@ def main():
         kept = 0
         dropped = 0
         for i, r in enumerate(data):
-            out = process_row(r, split, i, args.image_root, prompt_mode=args.prompt_mode)
+            out = process_row(
+                r,
+                split,
+                i,
+                args.image_root,
+                prompt_mode=args.prompt_mode,
+                inline_base64=args.inline_base64,
+            )
             if out is None:
                 dropped += 1
                 continue
