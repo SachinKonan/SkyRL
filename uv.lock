@@ -7278,6 +7278,12 @@ crypto = [
 ]
 
 [[package]]
+name = "pylatexenc"
+version = "2.10"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5d/ab/34ec41718af73c00119d0351b7a2531d2ebddb51833a36448fc7b862be60/pylatexenc-2.10.tar.gz", hash = "sha256:3dd8fd84eb46dc30bee1e23eaab8d8fb5a7f507347b23e5f38ad9675c84f40d3", size = 162597, upload-time = "2021-04-06T07:56:07.854Z" }
+
+[[package]]
 name = "pymdown-extensions"
 version = "10.21.2"
 source = { registry = "https://pypi.org/simple" }
@@ -8655,6 +8661,9 @@ fsdp = [
 gcp = [
     { name = "cloudpathlib", extra = ["gs"] },
 ]
+geometry3k = [
+    { name = "pylatexenc" },
+]
 gpu = [
     { name = "jax", extra = ["cuda12"], marker = "(sys_platform == 'linux' and extra == 'extra-5-skyrl-gpu') or (extra == 'extra-5-skyrl-gpu' and extra == 'extra-5-skyrl-megatron') or (extra == 'extra-5-skyrl-gpu' and extra == 'extra-5-skyrl-miniswe') or (extra == 'extra-5-skyrl-gpu' and extra == 'extra-5-skyrl-tpu') or (extra == 'extra-5-skyrl-flashrl' and extra == 'extra-5-skyrl-fsdp') or (extra == 'extra-5-skyrl-flashrl' and extra == 'extra-5-skyrl-gpu') or (extra == 'extra-5-skyrl-flashrl' and extra == 'extra-5-skyrl-jax') or (extra == 'extra-5-skyrl-flashrl' and extra == 'extra-5-skyrl-megatron') or (extra == 'extra-5-skyrl-flashrl' and extra == 'extra-5-skyrl-miniswe') or (extra == 'extra-5-skyrl-flashrl' and extra == 'extra-5-skyrl-tpu') or (extra == 'extra-5-skyrl-fsdp' and extra == 'extra-5-skyrl-jax') or (extra == 'extra-5-skyrl-fsdp' and extra == 'extra-5-skyrl-megatron') or (extra == 'extra-5-skyrl-jax' and extra == 'extra-5-skyrl-megatron') or (extra == 'extra-5-skyrl-megatron' and extra == 'extra-5-skyrl-miniswe') or (extra == 'extra-5-skyrl-megatron' and extra == 'extra-5-skyrl-tpu') or (extra == 'extra-5-skyrl-miniswe' and extra == 'extra-5-skyrl-tpu')" },
 ]
@@ -8857,6 +8866,7 @@ requires-dist = [
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "psycopg2-binary", marker = "extra == 'tinker'" },
     { name = "pybind11", marker = "extra == 'skyrl-train'" },
+    { name = "pylatexenc", marker = "extra == 'geometry3k'", specifier = ">=2.10" },
     { name = "pymdown-extensions", marker = "extra == 'dev'", specifier = ">=10.7" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-asyncio", marker = "extra == 'dev'" },
@@ -8900,7 +8910,7 @@ requires-dist = [
     { name = "vllm-router", marker = "sys_platform == 'linux' and extra == 'skyrl-train'" },
     { name = "wandb", marker = "extra == 'skyrl-train'" },
 ]
-provides-extras = ["gpu", "tpu", "tinker", "aws", "gcp", "azure", "jax", "skyrl-train", "fsdp", "megatron", "mamba", "flashrl", "miniswe", "search-arxiv", "harbor", "dev"]
+provides-extras = ["gpu", "tpu", "tinker", "aws", "gcp", "azure", "jax", "skyrl-train", "fsdp", "megatron", "mamba", "flashrl", "miniswe", "search-arxiv", "geometry3k", "harbor", "dev"]
 
 [[package]]
 name = "skyrl-gym"

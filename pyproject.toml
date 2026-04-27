@@ -169,6 +169,12 @@ miniswe = [
 search-arxiv = [
     "arxiv-retriever",
 ]
+# Geometry-3K env: math_utils.py uses pylatexenc + sympy to grade boxed answers.
+# sympy ships with transformers; pylatexenc is an extra so the base install
+# stays lean.
+geometry3k = [
+    "pylatexenc>=2.10",
+]
 harbor = [
     "harbor[daytona,modal]; python_version >= '3.12'",
 ]
