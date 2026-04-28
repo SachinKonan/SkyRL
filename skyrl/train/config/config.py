@@ -641,6 +641,12 @@ class TrainerConfig(BaseConfig):
     """If False, checkpoints skip the optimizer state dict (Adam moments). Resume loads
     model weights only; Adam moments restart from zero. ~3x smaller ckpts for 7B+ models
     -- useful on storage-constrained filesystems."""
+    gpu_keepalive_on_failure: bool = True
+    """If True (default), main_base.py wraps training in try/except and on failure
+    calls scripts/gpu_keepalive.keepalive(ckpt_path) to hold the slurm allocation
+    instead of releasing it. The user can SSH in, inspect ckpt_path/.error.txt,
+    optionally pause via .keepalive.pause, and release via .keepalive.release.
+    Set False on smokes where fail-fast is preferred."""
     eval_batch_size: int = 1024
     eval_before_train: bool = True
     eval_interval: int = 5
