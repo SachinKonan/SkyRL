@@ -550,7 +550,49 @@ def main() -> None:
     validate_cfg(cfg)
 
     initialize_ray(cfg)
-    ray.get(skyrl_entrypoint.remote(cfg))
+    try:
+        ray.get(skyrl_entrypoint.remote(cfg))
+    except BaseException as _e:
+        # Fault-tolerance: hold the slurm allocation instead of releasing it.
+        # See scripts/gpu_keepalive.py and trainer.gpu_keepalive_on_failure.
+        if not getattr(cfg.trainer, "gpu_keepalive_on_failure", True):
+            raise
+        import os as _os
+        import sys as _sys
+        import traceback as _tb
+        from pathlib import Path as _Path
+
+        _ckpt = _Path(str(cfg.trainer.ckpt_path))
+        try:
+            _ckpt.mkdir(parents=True, exist_ok=True)
+            (_ckpt / ".error.txt").write_text(
+                f"{type(_e).__name__}: {_e}\n\n{_tb.format_exc()}"
+            )
+        except Exception:
+            pass
+        try:
+            ray.shutdown()
+        except Exception:
+            pass
+        # Make scripts/gpu_keepalive.py importable.
+        _scripts = _os.path.join(_os.path.dirname(__file__), "..", "..", "..", "scripts")
+        _sys.path.insert(0, _os.path.abspath(_scripts))
+        try:
+            from gpu_keepalive import keepalive as _keepalive
+        except Exception as _imp_e:
+            print(f"[main] failed to import keepalive ({_imp_e!r}); re-raising original", flush=True)
+            raise _e
+        print(
+            f"\n[main] training raised {type(_e).__name__}: {_e}\n"
+            f"[main] entering keepalive at {_ckpt}\n"
+            f"[main]   inspect: cat {_ckpt}/.error.txt\n"
+            f"[main]   pause:   touch {_ckpt}/.keepalive.pause\n"
+            f"[main]   release: touch {_ckpt}/.keepalive.release\n",
+            flush=True,
+        )
+        _keepalive(_ckpt)
+        # keepalive returned because .keepalive.release was touched -- exit cleanly.
+        return
 
 
 if __name__ == "__main__":
