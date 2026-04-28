@@ -1,0 +1,131 @@
+#!/bin/bash
+# SFT v2 cold-start on Qwen2.5-7B-Instruct, run as a SLURM job array on
+# gpu-test with %1 concurrency. Differs from v1 (sft_qwen2.5_7b_array_gputest.sbatch):
+#
+#   - DATA_DIR: iclr_arxiv_sft_yearbalanced_short (4,382 rows, year-balanced,
+#     filtered to ≤7 turns AND ≤32K cumulative tokens, see
+#     examples/sft/build_sft_balanced_filtered.py)
+#   - NUM_STEPS=200 (was 412). At bs=32 over 4,382 examples that's ~1.46 epochs.
+#   - HF_SAVE_INTERVAL=50 (was 206). Saves HF safetensors at steps 50, 100,
+#     150, 200 — gives a quality-vs-step curve to pick from.
+#   - WARMUP=5 (was 10), proportional to halved horizon.
+#   - LR=1.0e-6 unchanged. The 200-step horizon already halves total update
+#     vs the 412-step run; halving LR on top would slow learning too much.
+#
+# Resume + cell budget unchanged from v1: save_fsdp_checkpoint=true,
+# ckpt_interval=10, max_ckpts_to_keep=3. Each cell is a 55-min training slot
+# that resumes the prior cell's FSDP shards.
+#
+# Per-cell budget (60 min wall, 55 min training cap):
+#   ~12 min tokenization + Ray init + model load
+#   ~1 min final FSDP ckpt save
+#   ~42 min training -> ~30 steps at 80-90s/step
+#   200 total steps -> ~7 cells (with retraces) -> ~7h wall
+#
+# Manual resubmission to extend (e.g., for more checkpoints past 200):
+#   RUN_NAME=sft_7b_short_<parent_id> sbatch --array=11-15%1 \
+#       sbatch/train_prediction/sft_qwen2.5_7b_v2_array_gputest.sbatch
+#
+#SBATCH --job-name=sft_7b_v2_array
+#SBATCH --partition=gpu-test
+#SBATCH --array=1-10%1
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=20
+#SBATCH --mem=300G
+#SBATCH --gres=gpu:4
+#SBATCH --constraint="gpu80"
+#SBATCH --time=00:55:00
+#SBATCH --output=logs/sft/array_v2_%A_%a.out
+#SBATCH --error=logs/sft/array_v2_%A_%a.err
+
+set -euo pipefail
+
+WORKDIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
+cd "$WORKDIR"
+mkdir -p logs/sft
+
+SCRATCH_ROOT="${SCRATCH_ROOT:-/scratch/gpfs/ZHUANGL/sk7524}"
+export HF_HOME="${HF_HOME:-${SCRATCH_ROOT}/hf}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-${SCRATCH_ROOT}/hf}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${SCRATCH_ROOT}/hf/datasets}"
+export TORCH_HOME="${TORCH_HOME:-${SCRATCH_ROOT}/torch}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${SCRATCH_ROOT}/.cache}"
+export WANDB_DIR="${WANDB_DIR:-${SCRATCH_ROOT}/wandb}"
+export TRANSFORMERS_OFFLINE=1
+export WANDB_MODE=offline
+export LOGURU_LEVEL=INFO
+mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" "$WANDB_DIR"
+
+# Shared run identity across all cells of the array (resume requires same dir).
+ARRAY_JOB="${SLURM_ARRAY_JOB_ID:-$SLURM_JOB_ID}"
+TASK_ID="${SLURM_ARRAY_TASK_ID:-1}"
+RUN_NAME="${RUN_NAME:-sft_7b_short_${ARRAY_JOB}}"
+CKPT_DIR="${CKPT_DIR:-${SCRATCH_ROOT}/ckpts/${RUN_NAME}}"
+
+DATA_DIR="${DATA_DIR_SFT:-${SCRATCH_ROOT}/SkyRLMain/data/iclr_arxiv_sft_yearbalanced_short}"
+MODEL_PATH="${MODEL_PATH:-${SCRATCH_ROOT}/hf/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28}"
+
+BATCH_SIZE="${BATCH_SIZE:-32}"
+MICRO_BS="${MICRO_BS:-1}"
+NUM_STEPS="${NUM_STEPS:-200}"
+CKPT_INTERVAL="${CKPT_INTERVAL:-10}"
+HF_SAVE_INTERVAL="${HF_SAVE_INTERVAL:-50}"
+MAX_LEN="${MAX_LEN:-40960}"
+LR="${LR:-1.0e-6}"
+WARMUP="${WARMUP:-5}"
+
+echo "=============================================="
+echo "Array parent: $ARRAY_JOB   Task: $TASK_ID  (this cell's job: $SLURM_JOB_ID)"
+echo "Host:         $(hostname)"
+echo "Partition:    gpu-test, 4× A100 80GB, --time=00:55:00"
+echo "Data:         $DATA_DIR"
+echo "Model init:   $MODEL_PATH"
+echo "Ckpt dir:     $CKPT_DIR  (shared across all cells)"
+echo "Run name:     $RUN_NAME"
+echo "Steps:        $NUM_STEPS  (batch=$BATCH_SIZE, micro=$MICRO_BS, max_len=$MAX_LEN)"
+echo "Schedule:     cosine, $WARMUP warmup, lr=$LR"
+echo "Resume:       latest (auto-detect, fresh start if no ckpt yet)"
+echo "Save:         FSDP every $CKPT_INTERVAL steps, HF every $HF_SAVE_INTERVAL steps"
+echo "=============================================="
+nvidia-smi
+if [ -f "${CKPT_DIR}/latest_ckpt_global_step.txt" ]; then
+    echo "Found prior checkpoint pointer:"
+    cat "${CKPT_DIR}/latest_ckpt_global_step.txt"
+fi
+
+source .venv/bin/activate
+python -m skyrl.train.main_sft \
+    strategy=fsdp2 \
+    model.path="$MODEL_PATH" \
+    dataset_name="${DATA_DIR}/train" \
+    dataset_split="train" \
+    messages_key=messages \
+    multi_turn_loss=true \
+    use_liger_kernel=true \
+    use_sample_packing=false \
+    max_length=${MAX_LEN} \
+    num_steps=${NUM_STEPS} \
+    batch_size=${BATCH_SIZE} \
+    micro_train_batch_size_per_gpu=${MICRO_BS} \
+    seed=42 \
+    optimizer_config.lr=${LR} \
+    optimizer_config.weight_decay=0.0 \
+    optimizer_config.max_grad_norm=1.0 \
+    optimizer_config.num_warmup_steps=${WARMUP} \
+    optimizer_config.scheduler=cosine \
+    placement.num_nodes=1 \
+    placement.num_gpus_per_node=4 \
+    fsdp_config.cpu_offload=false \
+    fsdp_config.reshard_after_forward=true \
+    logger=console \
+    project_name=train-prediction-sft \
+    run_name="$RUN_NAME" \
+    ckpt_path="$CKPT_DIR" \
+    ckpt_interval=${CKPT_INTERVAL} \
+    hf_save_interval=${HF_SAVE_INTERVAL} \
+    save_fsdp_checkpoint=true \
+    max_ckpts_to_keep=3 \
+    export_path="${CKPT_DIR}/exports" \
+    resume_from=latest \
+    "$@"
