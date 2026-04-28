@@ -97,6 +97,12 @@ class SFTConfig(BaseConfig):
     record_memory: bool = False
     """Save memory snapshots to ``{ckpt_path}/memory_snapshots/``.
     Visualize by dragging pickle files to https://docs.pytorch.org/memory_viz."""
+    use_liger_kernel: bool = False
+    """Apply liger-kernel fused kernels (RMSNorm / RoPE / SwiGLU) and fused
+    chunked cross-entropy for supported families (Qwen2, LLaMA, etc). Big win
+    for SFT on long sequences: fused CE avoids materializing the full
+    ``(batch, seq, vocab)`` logits tensor, which is dominant memory for large
+    vocab + long max_length (e.g. ~12 GB at 40K tokens × 152K Qwen vocab)."""
 
     # ---- SFT-specific flat fields ----
     strategy: str = "megatron"  # "megatron" or "fsdp2"
@@ -114,11 +120,34 @@ class SFTConfig(BaseConfig):
     ckpt_interval: int = 0
     max_ckpts_to_keep: int = -1
     """-1 to keep all checkpoints, N to keep only the last N."""
+    hf_save_interval: int = -1
+    """Save HF-format weights (safetensors) every N steps, in addition to the
+    FSDP-sharded native checkpoint. Needed to run ``main_generate`` or any
+    vLLM-based eval directly against the SFT checkpoint without a post-hoc
+    conversion. ``-1`` (default) disables the HF export."""
+    export_path: str = ""
+    """Where to save HF-format weights. Defaults to ``{ckpt_path}/exports`` if
+    unset. Mirrors the RL trainer's ``trainer.export_path``."""
+    save_fsdp_checkpoint: bool = True
+    """When False, ``save_checkpoint()`` skips the FSDP native ckpt (model
+    shards + optimizer state + trainer_state.pt + latest pointer) and only
+    runs the HF-format export (gated by ``hf_save_interval``). Use when the
+    checkpoint is for deployment / inference only and training-resume is not
+    required — halves per-epoch disk footprint and removes partial-write risk
+    on the big optimizer state dump."""
     resume_from: str = ""  # "" = no resume, "latest" = latest checkpoint, or path to global_step_N dir
     seed: int = 42
 
     # ---- Packing ----
     use_sample_packing: bool = True  # Pack multiple sequences per batch (requires flash_attn)
+
+    # ---- Multi-turn loss ----
+    multi_turn_loss: bool = False
+    """Apply loss on every assistant turn in a multi-turn conversation, not just
+    the last one. When True, tokenize_chat_example produces a per-token loss
+    mask that is 1 on assistant tokens (body + ``<|im_end|>``) and 0 on
+    prompt / tool-response / pad tokens within the action region. Default False
+    preserves the original behavior (loss only on the last assistant message)."""
 
     # ---- Dummy run / benchmarking ----
     dummy_run_full_ctx: bool = False  # Skip real data; fabricate full-context sequences
@@ -208,6 +237,7 @@ def build_skyrl_config_for_sft(sft_cfg: SFTConfig) -> SkyRLTrainConfig:
     cfg.trainer.policy.model_config_kwargs = sft_cfg.model_config_kwargs
     cfg.trainer.policy.use_torch_compile = sft_cfg.use_torch_compile
     cfg.trainer.policy.record_memory = sft_cfg.record_memory
+    cfg.trainer.use_liger_kernel = sft_cfg.use_liger_kernel
 
     # SFT doesn't use KL/ref model
     cfg.trainer.algorithm.use_kl_loss = False

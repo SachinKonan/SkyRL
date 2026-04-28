@@ -73,6 +73,7 @@ _THINK_CLOSE = "</think>"
 _ANSWER_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
 _BOXED_RE = re.compile(r"\\boxed\{([^}]*)\}")
 _SSEARCH_RE = re.compile(r"<ssearch>(.*?)</ssearch>", re.DOTALL)
+_PYTHON_RE = re.compile(r"<python>(.*?)</python>", re.DOTALL)
 _VALID_ANSWERS = frozenset({"accept", "reject"})
 
 
@@ -89,9 +90,10 @@ def _turn_is_well_formatted(content: str, is_final: bool) -> bool:
       - Inside the answer, exactly one ``\\boxed{...}`` appears.
       - The contents of that ``\\boxed{...}`` normalize to ``accept`` or ``reject``.
 
-    Intermediate turn (multi-turn search only):
-      - The post-``</think>`` text contains ``<ssearch>...</ssearch>`` with a
-        non-empty query string inside (semantic_search takes a single str).
+    Intermediate turn:
+      - The post-``</think>`` text contains either ``<ssearch>...</ssearch>``
+        with a non-empty body (one or more newline-separated queries) or
+        ``<python>...</python>`` with a non-empty code body.
     """
     if _THINK_CLOSE not in content:
         return False
@@ -108,6 +110,9 @@ def _turn_is_well_formatted(content: str, is_final: bool) -> bool:
             return False
         return boxed[0].strip().lower() in _VALID_ANSWERS
     m = _SSEARCH_RE.search(post)
+    if m and m.group(1).strip():
+        return True
+    m = _PYTHON_RE.search(post)
     return bool(m and m.group(1).strip())
 
 

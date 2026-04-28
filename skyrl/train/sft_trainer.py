@@ -96,34 +96,36 @@ def tokenize_chat_example(
     tokenizer,
     max_length: int = 512,
     messages_key: str = "messages",
+    multi_turn_loss: bool = False,
     **tokenizer_kwargs,
 ) -> dict | None:
-    """Tokenize a chat-format example. Loss on last assistant message only.
+    """Tokenize a chat-format example.
 
-    Uses apply_chat_template to tokenize prompt (all messages except the last)
-    and full conversation, then computes num_actions from the difference.
+    Default behavior: loss on the **last** assistant message only. Uses
+    ``apply_chat_template`` to tokenize the prompt (everything except the last
+    message) and the full conversation, then computes ``num_actions`` from the
+    difference. ``loss_mask`` is omitted and the collator treats every action
+    token as loss-contributing.
 
-    Returns dict with input_ids, attention_mask, num_actions -- same format as
-    tokenize_sft_example(), so collate_sft_batch() works unchanged.
+    When ``multi_turn_loss=True``: the action region spans from the FIRST
+    assistant message to the end of the conversation (so intermediate tool
+    responses and prompt tokens are included). A per-token ``loss_mask`` of
+    length ``num_actions`` is returned; it is 1 on tokens that belong to an
+    assistant message (body + ``<|im_end|>`` + trailing newline) and 0 on
+    prompt / tool-response tokens. The existing worker slice
+    ``log_probs[:, -num_actions - 1 : -1]`` then picks up the whole action
+    region and the mask selects only the assistant-generated tokens.
+
+    Returns dict with input_ids, attention_mask, num_actions, and optionally
+    loss_mask (list[int] of length num_actions). Returns ``None`` if the
+    example is unusable (no assistant message, fully truncated, etc.).
     """
     messages = example[messages_key]
 
-    # Validate: last message must be from assistant
     if not messages or messages[-1]["role"] != "assistant":
         return None
 
-    # Tokenize prompt (everything except last assistant message)
-    prompt_ids = tokenizer.apply_chat_template(
-        messages[:-1],
-        add_generation_prompt=True,
-        tokenize=True,
-        truncation=True,
-        max_length=max_length,
-        return_dict=False,
-        **tokenizer_kwargs,
-    )
-
-    # Tokenize full conversation
+    # Tokenize full conversation once.
     full_ids = tokenizer.apply_chat_template(
         messages,
         add_generation_prompt=False,
@@ -134,14 +136,119 @@ def tokenize_chat_example(
         **tokenizer_kwargs,
     )
 
-    num_actions = len(full_ids) - len(prompt_ids)
+    if not multi_turn_loss:
+        # Legacy path: prompt is everything except the last message.
+        prompt_ids = tokenizer.apply_chat_template(
+            messages[:-1],
+            add_generation_prompt=True,
+            tokenize=True,
+            truncation=True,
+            max_length=max_length,
+            return_dict=False,
+            **tokenizer_kwargs,
+        )
+        num_actions = len(full_ids) - len(prompt_ids)
+        if num_actions <= 0:
+            return None
+        return {
+            "input_ids": full_ids,
+            "attention_mask": [1] * len(full_ids),
+            "num_actions": num_actions,
+        }
+
+    # Multi-turn path: compute per-token loss mask in a single pass.
+    #
+    # Strategy: render the full chat once with ``tokenize=False`` to get the
+    # exact string the tokenizer sees, tokenize it once with
+    # ``return_offsets_mapping=True``, then find every assistant turn's byte
+    # span in the rendered string via regex and mark the tokens whose offsets
+    # fall inside the body. This is O(N) in total length, versus the previous
+    # O(N²) that called apply_chat_template once per assistant turn per
+    # example.
+    import re as _re
+
+    first_asst = next((i for i, m in enumerate(messages) if m["role"] == "assistant"), None)
+    if first_asst is None:
+        return None
+
+    rendered = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=False,
+        tokenize=False,
+        **tokenizer_kwargs,
+    )
+    enc = tokenizer(
+        rendered,
+        add_special_tokens=False,
+        truncation=True,
+        max_length=max_length,
+        return_offsets_mapping=True,
+    )
+    full_ids = enc["input_ids"]
+    offsets = enc["offset_mapping"]
+
+    # Action region starts at the first ``<|im_start|>assistant\n`` in the
+    # rendered string. Found with a cheap substring search — avoids a second
+    # apply_chat_template call.
+    ASST_HEADER = "<|im_start|>assistant\n"
+    first_asst_pos = rendered.find(ASST_HEADER)
+    if first_asst_pos < 0:
+        return None
+    prompt_byte_len = first_asst_pos + len(ASST_HEADER)
+    # First token whose start offset >= prompt_byte_len is the action region start.
+    action_start_tok = 0
+    for idx, (a, _b) in enumerate(offsets):
+        if a >= prompt_byte_len:
+            action_start_tok = idx
+            break
+    else:
+        return None
+
+    num_actions = len(full_ids) - action_start_tok
     if num_actions <= 0:
+        return None
+
+    # Locate assistant body spans in the rendered string. Qwen-style chat
+    # template uses ``<|im_start|>assistant\n<BODY><|im_end|>\n``; we include
+    # the ``<|im_end|>\n`` in the mask (teaches the model to emit the stop
+    # token, same semantics as the original per-turn fallback).
+    ASST_END = "<|im_end|>"
+    loss_mask = [0] * num_actions
+    cursor = 0
+    spans_bytes: List[Tuple[int, int]] = []
+    while True:
+        h = rendered.find(ASST_HEADER, cursor)
+        if h < 0:
+            break
+        body_start = h + len(ASST_HEADER)
+        e = rendered.find(ASST_END, body_start)
+        if e < 0:
+            break
+        # Extend body_end to cover <|im_end|> + trailing \n (if present).
+        body_end = e + len(ASST_END)
+        if body_end < len(rendered) and rendered[body_end] == "\n":
+            body_end += 1
+        spans_bytes.append((body_start, body_end))
+        cursor = body_end
+
+    # Mark tokens in the action region whose offsets fall inside any assistant span.
+    for tok_idx in range(action_start_tok, len(full_ids)):
+        a, b = offsets[tok_idx]
+        if a == b:
+            continue  # special tokens / zero-width
+        for s, e in spans_bytes:
+            if a >= s and b <= e:
+                loss_mask[tok_idx - action_start_tok] = 1
+                break
+
+    if sum(loss_mask) == 0:
         return None
 
     return {
         "input_ids": full_ids,
         "attention_mask": [1] * len(full_ids),
         "num_actions": num_actions,
+        "loss_mask": loss_mask,
     }
 
 
@@ -170,9 +277,17 @@ def collate_sft_batch(examples: list, tokenizer) -> TrainingInputBatch:
         # Left-pad sequences (SkyRL convention)
         sequences.append([tokenizer.pad_token_id] * pad_len + ex["input_ids"])
         attention_masks.append([0] * pad_len + ex["attention_mask"])
-        # Per-example loss_mask: 0s for padding, 1s only for this example's response tokens
+        # Per-example loss_mask: 0s for padding, then either a per-token mask
+        # (multi_turn_loss) or all 1s on the example's response tokens.
         action_pad = max_num_actions - ex["num_actions"]
-        loss_masks.append([0] * action_pad + [1] * ex["num_actions"])
+        per_token_mask = ex.get("loss_mask")
+        if per_token_mask is not None:
+            assert len(per_token_mask) == ex["num_actions"], (
+                f"loss_mask length {len(per_token_mask)} != num_actions {ex['num_actions']}"
+            )
+            loss_masks.append([0] * action_pad + list(per_token_mask))
+        else:
+            loss_masks.append([0] * action_pad + [1] * ex["num_actions"])
 
     batch = TrainingInputBatch(
         {
@@ -314,7 +429,13 @@ class SFTTrainer:
         if self.sft_cfg.messages_key in columns:
             # Chat format
             tokenized = [
-                tokenize_chat_example(ex, self.tokenizer, self.sft_cfg.max_length, self.sft_cfg.messages_key)
+                tokenize_chat_example(
+                    ex,
+                    self.tokenizer,
+                    self.sft_cfg.max_length,
+                    self.sft_cfg.messages_key,
+                    multi_turn_loss=self.sft_cfg.multi_turn_loss,
+                )
                 for ex in dataset
             ]
         elif "instruction" in columns and "output" in columns:
@@ -632,13 +753,19 @@ class SFTTrainer:
             }
             log_dict.update({f"timing/{k}": v for k, v in all_timings.items()})
 
-            # Checkpoint at regular intervals
-            if (
-                self.sft_cfg.ckpt_path
-                and self.sft_cfg.ckpt_interval > 0
-                and self.global_step > 0
+            # Checkpoint at regular intervals. Fires on either cadence —
+            # ckpt_interval (FSDP native path) or hf_save_interval (HF export
+            # path). ``save_checkpoint`` internally honors ``save_fsdp_checkpoint``
+            # and ``hf_save_interval`` to decide which artifacts to persist.
+            fsdp_due = (
+                self.sft_cfg.ckpt_interval > 0
                 and self.global_step % self.sft_cfg.ckpt_interval == 0
-            ):
+            )
+            hf_due = (
+                self.sft_cfg.hf_save_interval > 0
+                and self.global_step % self.sft_cfg.hf_save_interval == 0
+            )
+            if self.sft_cfg.ckpt_path and self.global_step > 0 and (fsdp_due or hf_due):
                 with Timer("save_checkpoint", all_timings):
                     self.save_checkpoint()
                 log_dict["timing/save_checkpoint"] = all_timings["save_checkpoint"]
@@ -673,32 +800,56 @@ class SFTTrainer:
         logger.info("SFT training complete!")
 
     def save_checkpoint(self):
-        """Save a checkpoint at the given step."""
+        """Save a checkpoint at the given step.
+
+        Two independent save paths, each controlled by its own flag:
+          - FSDP native (model shards + optimizer state + trainer_state.pt +
+            ``latest_ckpt_global_step.txt`` pointer): gated by
+            ``save_fsdp_checkpoint``. Needed for training resume.
+          - HF-format export (safetensors): gated by ``hf_save_interval``.
+            Needed for vLLM / GRPO init.
+        """
         step = self.global_step
         global_step_folder = os.path.join(self.sft_cfg.ckpt_path, f"{GLOBAL_STEP_PREFIX}{step}")
-        policy_save_dir = os.path.join(global_step_folder, "policy")
         io.makedirs(global_step_folder, exist_ok=True)
-        logger.info(f"Saving checkpoint at step {step} to {global_step_folder}")
-        self.dispatch.save_checkpoint("policy", policy_save_dir, self.tokenizer)
 
-        # Save trainer state for cross-validation on resume (mirrors PPO's trainer_state.pt)
-        trainer_state = {
-            "global_step": step,
-            "config": asdict(self.sft_cfg),
-        }
-        trainer_state_path = os.path.join(global_step_folder, "trainer_state.pt")
-        with io.open_file(trainer_state_path, "wb") as f:
-            torch.save(trainer_state, f)
-        logger.info(f"Saved trainer state to {trainer_state_path}")
+        if self.sft_cfg.save_fsdp_checkpoint:
+            policy_save_dir = os.path.join(global_step_folder, "policy")
+            logger.info(f"Saving FSDP checkpoint at step {step} to {global_step_folder}")
+            self.dispatch.save_checkpoint("policy", policy_save_dir, self.tokenizer)
 
-        # Atomic tracking -- write this last after all saves succeed
-        latest_file = os.path.join(self.sft_cfg.ckpt_path, "latest_ckpt_global_step.txt")
-        with io.open_file(latest_file, "w") as f:
-            f.write(str(step))
-        logger.info(f"Checkpoint saved for global_step_{step}")
+            # Save trainer state for cross-validation on resume (mirrors PPO's trainer_state.pt)
+            trainer_state = {
+                "global_step": step,
+                "config": asdict(self.sft_cfg),
+            }
+            trainer_state_path = os.path.join(global_step_folder, "trainer_state.pt")
+            with io.open_file(trainer_state_path, "wb") as f:
+                torch.save(trainer_state, f)
+            logger.info(f"Saved trainer state to {trainer_state_path}")
 
-        # Clean up old checkpoints after successful save
-        cleanup_old_checkpoints(self.sft_cfg.ckpt_path, self.sft_cfg.max_ckpts_to_keep)
+            # Atomic tracking -- write this last after all saves succeed
+            latest_file = os.path.join(self.sft_cfg.ckpt_path, "latest_ckpt_global_step.txt")
+            with io.open_file(latest_file, "w") as f:
+                f.write(str(step))
+            logger.info(f"Checkpoint saved for global_step_{step}")
+
+            # Clean up old checkpoints after successful save
+            cleanup_old_checkpoints(self.sft_cfg.ckpt_path, self.sft_cfg.max_ckpts_to_keep)
+        else:
+            logger.info(f"save_fsdp_checkpoint=False -- skipping FSDP native save at step {step}")
+
+        # Optional HF-format export. Mirrors the RL trainer's ``hf_save_interval``
+        # behavior so the SFT checkpoint is directly loadable by vLLM /
+        # transformers without a post-hoc FSDP-shard conversion step. Export path
+        # defaults to ``{ckpt_path}/exports`` when ``export_path`` is unset.
+        hf_interval = self.sft_cfg.hf_save_interval
+        if hf_interval > 0 and step % hf_interval == 0:
+            export_root = self.sft_cfg.export_path or os.path.join(self.sft_cfg.ckpt_path, "exports")
+            hf_export_dir = os.path.join(export_root, f"{GLOBAL_STEP_PREFIX}{step}", "policy")
+            io.makedirs(hf_export_dir, exist_ok=True)
+            logger.info(f"Saving HF-format weights to {hf_export_dir}")
+            self.dispatch.save_hf_model("policy", hf_export_dir, self.tokenizer)
 
     # ------------------------------------------------------------------ #
     # Lifecycle

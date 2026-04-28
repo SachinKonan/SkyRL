@@ -13,7 +13,7 @@ import json
 import logging
 import threading
 import uuid
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import requests
@@ -133,15 +133,32 @@ class SearchArxivToolGroup(ToolGroup):
         return payload
 
     @tool
-    def semantic_search(self, query: str) -> str:
-        if not query:
+    def semantic_search(self, query: Union[str, List[str]]) -> str:
+        """Run one or more semantic-search queries.
+
+        `query` may be a single string or a list of strings. When a list, each
+        query is posted to the retrieval server separately and results are
+        concatenated with `## Query k: "<q>"` headers so the caller can see
+        which results came from which query.
+        """
+        if isinstance(query, str):
+            queries = [query.strip()] if query and query.strip() else []
+        else:
+            queries = [q.strip() for q in (query or []) if isinstance(q, str) and q.strip()]
+        if not queries:
             return json.dumps({"result": "Empty query."})
-        payload = self._base_payload()
-        payload["query"] = query.strip()
-        raw, err = _post_retrieve(self.search_url, payload, self.timeout, self.session, self.log_requests)
-        if err:
-            return json.dumps({"result": f"Retrieval error: {err}"})
-        return json.dumps({"result": _format_results(raw)})
+
+        sections: List[str] = []
+        for idx, q in enumerate(queries, start=1):
+            payload = self._base_payload()
+            payload["query"] = q
+            raw, err = _post_retrieve(self.search_url, payload, self.timeout, self.session, self.log_requests)
+            header = f'## Query {idx}: "{q}"'
+            if err:
+                sections.append(f"{header}\nRetrieval error: {err}")
+            else:
+                sections.append(f"{header}\n{_format_results(raw)}")
+        return json.dumps({"result": "\n\n".join(sections)})
 
     @tool
     def author_search(self, authors: str) -> str:

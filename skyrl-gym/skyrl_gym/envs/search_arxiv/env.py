@@ -1,13 +1,14 @@
 """
-Environment for ICLR accept/reject prediction with arXiv retrieval tools.
+Environment for ICLR accept/reject prediction with arXiv retrieval + python tools.
 
 The agent issues one of:
-  - <ssearch>query</ssearch>         — semantic search over the arXiv corpus
-  - <asearch>lastname1,lastname2</asearch>  — author search
-  - <answer>Accept|Reject</answer>   — final prediction
+  - <ssearch>q1\\nq2\\n...</ssearch>  — semantic search; body is newline-separated
+                                        queries (a single-line body is one query)
+  - <python>code</python>             — execute Python; stdout/stderr comes back
+  - <answer>...\\boxed{Accept|Reject}</answer>   — final prediction
 
-Retrieval results come back wrapped in <information>...</information>. Reward is
-exact match of the answer tag against extras["reward_spec"]["ground_truth"]["target"]
+Tool results come back wrapped in <information>...</information>. Reward is exact
+match of the boxed answer against extras["reward_spec"]["ground_truth"]["target"]
 (a list of strings, typically ["Accept"] or ["Reject"]).
 
 Per-episode filter context (exclude_title, upper_bound_datetime) is threaded into
@@ -17,13 +18,14 @@ it is currently evaluating and cannot see papers from after the submission date.
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from omegaconf import DictConfig
 
 from skyrl_gym.envs.base_text_env import BaseTextEnv, BaseTextEnvStepOutput, ConversationType
 from skyrl_gym.envs.search_arxiv.utils import compute_format_score, compute_score
 from skyrl_gym.tools import SearchArxivToolGroup
+from skyrl_gym.tools.python import PythonCodeExecutorToolGroup
 
 
 @dataclass
@@ -37,6 +39,8 @@ class SearchArxivEnvConfig:
     format_weight: float = 0.2
     """Weight (alpha) on the per-turn format reward. Final reward is
     (1 - alpha) * R_acc + alpha * R_fmt."""
+    python_enabled: bool = True
+    python_timeout: float = 10.0
 
 
 class SearchArxivEnv(BaseTextEnv):
@@ -50,6 +54,7 @@ class SearchArxivEnv(BaseTextEnv):
         # max_turns: env_config default, overridable per-sample via extras.
         self.max_turns = int(extras.get("max_turns", env_config.max_turns))
         self.search_enabled = bool(extras.get("search_enabled", env_config.search_enabled))
+        self.python_enabled = bool(extras.get("python_enabled", getattr(env_config, "python_enabled", True)))
         self.format_weight = float(extras.get("format_weight", env_config.format_weight))
 
         self.tool_group = SearchArxivToolGroup(
@@ -63,21 +68,32 @@ class SearchArxivEnv(BaseTextEnv):
             upper_bound_datetime=extras.get("upper_bound_datetime"),
             exclude_title=extras.get("exclude_title"),
         )
-        self.init_tool_groups([self.tool_group])
+        self.python_group = PythonCodeExecutorToolGroup(
+            timeout=float(getattr(env_config, "python_timeout", 10.0)),
+        )
+        self.init_tool_groups([self.tool_group, self.python_group])
 
         self.chat_history: ConversationType = []
 
     _SEM_RE = re.compile(r"<ssearch>(.*?)</ssearch>", re.DOTALL)
+    _PY_RE = re.compile(r"<python>(.*?)</python>", re.DOTALL)
 
-    def _parse_action(self, action: str):
+    def _parse_action(self, action: str) -> Tuple[Optional[str], Any]:
         """Return (tool_name, arg) or (None, None).
 
-        Only <ssearch>…</ssearch> is parsed. Author-search (<asearch>) has been
-        retired — we don't want the model learning to shortcut via author match.
+        - <ssearch>body</ssearch> → ("semantic_search", List[str]); body is split
+          on newlines and non-empty lines become queries.
+        - <python>code</python>   → ("python", code_str).
+        Author-search (<asearch>) has been retired.
         """
         sem = self._SEM_RE.search(action)
         if sem:
-            return "semantic_search", sem.group(1).strip()
+            body = sem.group(1)
+            queries = [q.strip() for q in body.split("\n") if q.strip()]
+            return "semantic_search", queries
+        py = self._PY_RE.search(action)
+        if py:
+            return "python", py.group(1)
         return None, None
 
     def _get_reward(self, done: bool) -> float:
@@ -115,28 +131,38 @@ class SearchArxivEnv(BaseTextEnv):
             return BaseTextEnvStepOutput(observations=[], reward=reward, done=True, metadata={})
 
         tool_name, arg = self._parse_action(action)
+        tool_group_name = (
+            "PythonCodeExecutorToolGroup" if tool_name == "python" else "SearchArxivToolGroup"
+        )
         new_obs: Optional[Dict[str, str]] = None
-        info: Dict[str, Any] = {"tool_group": "SearchArxivToolGroup", "tool_name": tool_name, "tool_input": arg}
+        info: Dict[str, Any] = {"tool_group": tool_group_name, "tool_name": tool_name, "tool_input": arg}
 
         if tool_name is None:
             new_obs = {
                 "role": "user",
                 "content": (
                     "\n<information>No valid tag found. Use <ssearch>query</ssearch>, "
-                    "<asearch>lastname1,lastname2</asearch>, or <answer>Accept|Reject</answer>.</information>\n"
+                    "<python>code</python>, or <answer>\\boxed{Accept|Reject}</answer>.</information>\n"
                 ),
             }
-        elif not self.search_enabled:
+        elif tool_name == "semantic_search" and not self.search_enabled:
             new_obs = {
                 "role": "user",
                 "content": (
                     "\n<information>Search is disabled for this episode. "
-                    "Respond with <answer>Accept</answer> or <answer>Reject</answer>.</information>\n"
+                    "Respond with <answer>\\boxed{Accept}</answer> or <answer>\\boxed{Reject}</answer>.</information>\n"
+                ),
+            }
+        elif tool_name == "python" and not self.python_enabled:
+            new_obs = {
+                "role": "user",
+                "content": (
+                    "\n<information>Python execution is disabled for this episode.</information>\n"
                 ),
             }
         else:
             try:
-                observation = self._execute_tool("SearchArxivToolGroup", tool_name, [arg])
+                observation = self._execute_tool(tool_group_name, tool_name, [arg])
                 new_obs = {"role": "user", "content": observation}
             except Exception as e:
                 new_obs = {"role": "user", "content": f"\n<information>Tool error: {e}</information>\n"}
