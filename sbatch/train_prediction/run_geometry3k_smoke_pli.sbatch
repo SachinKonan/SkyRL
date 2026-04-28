@@ -1,23 +1,22 @@
 #!/bin/bash
-# Geometry-3K VL smoke. Trains Qwen2.5-VL-3B for a few GRPO steps on a small
-# train slice from the geometry3k dataset to validate the new VL stack:
-#   - vllm 0.19.1rc1.dev391+g80b18230e (PR #38405 multimodal /generate endpoint)
-#   - torch 2.11
-#   - main_base.py + generator.vision_language_generator=true dispatch
+# Geometry-3K VL smoke -- PLI variant. Identical config to run_geometry3k_smoke.sbatch
+# (the gpu-test version) but targets the pli partition under llm_explore so it
+# can schedule sooner. No gpu80 constraint -- pli has mixed 40/80GB nodes and
+# a 3B VL model fits comfortably on 40GB.
 #
 # Prereq -- build the parquet (one-time):
 #   .venv/bin/python examples/train/geometry3k/geometry_3k_dataset.py \
 #       --output_dir data/geometry_3k
 #
-#SBATCH --job-name=g3k_smoke
+#SBATCH --job-name=g3k_smoke_pli
+#SBATCH --account=llm_explore
+#SBATCH --partition=pli
 #SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=200G
 #SBATCH --gres=gpu:2
-#SBATCH --constraint="gpu80"
-#SBATCH --partition=gpu-test
-#SBATCH --output=logs/train_prediction/g3k_smoke_%j.out
-#SBATCH --error=logs/train_prediction/g3k_smoke_%j.err
+#SBATCH --output=logs/train_prediction/g3k_smoke_pli_%j.out
+#SBATCH --error=logs/train_prediction/g3k_smoke_pli_%j.err
 
 set -euo pipefail
 
@@ -40,7 +39,7 @@ mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME" "$WANDB_DIR"
 OUT_ROOT="${OUT_ROOT:-/scratch/gpfs/ZHUANGL/sk7524/SkyRLVisionMain}"
 DATA_DIR="${DATA_DIR:-${OUT_ROOT}/data/geometry_3k}"
 MODEL_PATH="${MODEL_PATH:-/scratch/gpfs/ZHUANGL/sk7524/hf/hub/models--Qwen--Qwen2.5-VL-3B-Instruct/snapshots/66285546d2b821cf421d4f5eb2576359d3770cd3}"
-RUN_NAME="${RUN_NAME:-g3k_qwen2.5_vl_3b_smoke}"
+RUN_NAME="${RUN_NAME:-g3k_qwen2.5_vl_3b_smoke_pli}"
 
 echo "=============================================="
 echo "Job:         $SLURM_JOB_ID"
