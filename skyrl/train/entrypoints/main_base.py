@@ -558,23 +558,46 @@ def main() -> None:
             ray.shutdown()
         except Exception:
             pass
+        # Disk-full or broken-pipe failures must not abort the keepalive path,
+        # so wrap every print and the keepalive call itself in best-effort guards.
+        # (Hit in jobs 7347709/7347710: pipe write raised mid-handler, killing
+        # the process before keepalive started.)
+        def _safe_print(_msg):
+            try:
+                print(_msg, flush=True)
+            except Exception:
+                pass
+
         # Make scripts/gpu_keepalive.py importable.
         _scripts = _os.path.join(_os.path.dirname(__file__), "..", "..", "..", "scripts")
         _sys.path.insert(0, _os.path.abspath(_scripts))
         try:
             from gpu_keepalive import keepalive as _keepalive
         except Exception as _imp_e:
-            print(f"[main] failed to import keepalive ({_imp_e!r}); re-raising original", flush=True)
-            raise _e
-        print(
+            _safe_print(f"[main] failed to import keepalive ({_imp_e!r}); sleeping forever")
+            try:
+                import time as _time
+                while True:
+                    _time.sleep(3600)
+            except KeyboardInterrupt:
+                return
+        _safe_print(
             f"\n[main] training raised {type(_e).__name__}: {_e}\n"
             f"[main] entering keepalive at {_ckpt}\n"
             f"[main]   inspect: cat {_ckpt}/.error.txt\n"
             f"[main]   pause:   touch {_ckpt}/.keepalive.pause\n"
-            f"[main]   release: touch {_ckpt}/.keepalive.release\n",
-            flush=True,
+            f"[main]   release: touch {_ckpt}/.keepalive.release\n"
         )
-        _keepalive(_ckpt)
+        try:
+            _keepalive(_ckpt)
+        except Exception as _ka_e:
+            _safe_print(f"[main] keepalive itself failed ({type(_ka_e).__name__}: {_ka_e}); sleeping forever")
+            try:
+                import time as _time
+                while True:
+                    _time.sleep(3600)
+            except KeyboardInterrupt:
+                return
         # keepalive returned because .keepalive.release was touched -- exit cleanly.
         return
 
