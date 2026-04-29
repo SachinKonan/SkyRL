@@ -520,6 +520,14 @@ class GeneratorConfig(BaseConfig):
     """If True, BasePPOExp.get_generator returns SkyRLVLMGymGenerator (multi-modal
     text+image rollouts) instead of the default SkyRLGymGenerator. Pattern ported
     from nithinvc/SkyRL f83573cf."""
+    gather_mini_batch_size: Optional[int] = None
+    """If set, SkyRLGymGenerator.generate() awaits trajectory tasks in chunks of
+    this size instead of one big tqdm.gather() over all of them. Equivalent to
+    sending requests in mini-batches at the application layer (vs the in-flight
+    semaphore from SKYRL_GENERATE_CONCURRENCY_PER_ENGINE which still creates
+    every task at once but throttles delivery). Useful when the head process
+    appears to wedge while gathering thousands of long-context VL rollouts.
+    Default None = current single-gather behavior."""
     max_turns: int = 1
     max_input_length: Optional[int] = None
     """Max generator input length for multi-turn conversations. For single-turn, set equal to ``max_prompt_length``."""

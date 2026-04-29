@@ -766,13 +766,31 @@ class SkyRLGymGenerator(GeneratorInterface):
                 )
             )
 
-        all_outputs = await tqdm.gather(
-            *tasks,
-            desc="Generating Trajectories",
-            miniters=max(1, len(tasks) // 10),
-            mininterval=5,
-            disable=disable_tqdm,
-        )
+        # Optional mini-batched gather: process tasks in chunks of
+        # `gather_mini_batch_size` instead of all-at-once. Keeps the number of
+        # *live* asyncio tasks bounded (different from the in-flight semaphore
+        # in remote_inference_client which throttles already-created tasks).
+        gather_mb = getattr(self.generator_cfg, "gather_mini_batch_size", None)
+        if gather_mb is not None and gather_mb > 0 and gather_mb < len(tasks):
+            all_outputs = []
+            for chunk_start in range(0, len(tasks), gather_mb):
+                chunk = tasks[chunk_start:chunk_start + gather_mb]
+                chunk_outputs = await tqdm.gather(
+                    *chunk,
+                    desc=f"Generating Trajectories [{chunk_start}:{chunk_start + len(chunk)}]/{len(tasks)}",
+                    miniters=max(1, len(chunk) // 10),
+                    mininterval=5,
+                    disable=disable_tqdm,
+                )
+                all_outputs.extend(chunk_outputs)
+        else:
+            all_outputs = await tqdm.gather(
+                *tasks,
+                desc="Generating Trajectories",
+                miniters=max(1, len(tasks) // 10),
+                mininterval=5,
+                disable=disable_tqdm,
+            )
 
         if self.generator_cfg.step_wise_trajectories:
             responses = []
