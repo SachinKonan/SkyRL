@@ -490,13 +490,17 @@ def _apply_slurm_job_overrides(cfg: SkyRLTrainConfig) -> None:
 
     Active overrides:
       * 7190283 -- COMPLETE (OOM at step 40). Listed here for history; no-op.
-      * 7190284 -- VL-7B 1-step half-node. max_prompt_length was 49152 in the
-        sbatch snapshot; real max is 36864. Also forces hf_save_interval=999999
-        to disable mid-training HF saves (prior text run OOMed during the FSDP
-        full-weight gather at step 40, so we skip in-training HF export and
-        rely on the lightweight FSDP shard ckpts).
-      * 7307929 -- Vero-Qwen25-7B VL (submitted after base64 fix but with
-        hf_save_interval=20 in the snapshot). Same HF-save override.
+      * 7190284 -- COMPLETE (Invalid fields). No-op.
+      * 7307929 -- Vero-Qwen25-7B VL (submitted before base64 fix). Forces
+        max_prompt_length=36864 + hf_save_interval=999999.
+      * 7382989 -- LOST (kernel OOM-kill on 2026-04-29 10:54). No-op.
+      * 7413352 -- tp_vl_vero_7b_1step_grpo_small replacement queued on ailab.
+        Submitted before the chunked-gather code existed, so its sbatch does
+        not pass generator.gather_mini_batch_size. We force it on at runtime
+        to avoid the 12-min silent stall observed on 7382989's first step
+        (gathering 2048 asyncio futures on long VL prompts wedged the head
+        process). Also forces max_prompt_length=36864 + hf_save_interval=999999
+        as before.
 
     Remove entries once the corresponding job finishes.
     """
@@ -505,13 +509,14 @@ def _apply_slurm_job_overrides(cfg: SkyRLTrainConfig) -> None:
     job_id = os.environ.get("SLURM_JOB_ID", "")
     overrides_by_job = {
         "7190283": {"max_prompt_length": 26480},  # text 7B 1-step (already done)
-        "7190284": {
-            "max_prompt_length": 36864,     # VL-7B 1-step half-node (VL p99 ~30,800 tokens)
-            "hf_save_interval": 999999,     # prevent HF-save OOM (see docstring)
-        },
         "7307929": {
             "max_prompt_length": 36864,     # Vero-Qwen25-7B VL (same VL token budget as 7190284)
             "hf_save_interval": 999999,     # Vero-Qwen25-7B VL: same HF-save guard
+        },
+        "7413352": {
+            "max_prompt_length": 36864,
+            "hf_save_interval": 999999,
+            "gather_mini_batch_size": 64,   # chunk 2048-rollout gather into 32x64 (avoid head-process stall)
         },
     }
     if job_id not in overrides_by_job:
@@ -533,6 +538,14 @@ def _apply_slurm_job_overrides(cfg: SkyRLTrainConfig) -> None:
             print(
                 f"[slurm-override] Job {job_id}: forced hf_save_interval {old}->{new_value} "
                 f"(disable mid-training HF save; rely on shard ckpts)",
+                flush=True,
+            )
+        elif field == "gather_mini_batch_size":
+            old = getattr(cfg.generator, "gather_mini_batch_size", None)
+            cfg.generator.gather_mini_batch_size = new_value
+            print(
+                f"[slurm-override] Job {job_id}: forced gather_mini_batch_size {old}->{new_value} "
+                f"(chunked tqdm.gather; bounds live asyncio task count per chunk)",
                 flush=True,
             )
 
