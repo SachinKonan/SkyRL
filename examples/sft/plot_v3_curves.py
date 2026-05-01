@@ -50,9 +50,9 @@ STEPS = [50, 100, 150, 200]
 COLOR = {
     "text":   "#6098FF",   # blue
     "panel":  "#FF8988",   # red
-    "vision": "#77B25D",   # green
+    "textpanel": "#77B25D",   # green
 }
-MARKER = {"text": "o", "panel": "s", "vision": "D"}
+MARKER = {"text": "o", "panel": "s", "textpanel": "D"}
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +168,7 @@ def main():
     loss_curves = {
         "text":   _text_loss_curve(),
         "panel":  _lf_loss_curve(LF_PANEL_CKPT),
-        "vision": _lf_loss_curve(LF_VISION_CKPT),
+        "textpanel": _lf_loss_curve(LF_VISION_CKPT),
     }
     for mod, (s, l) in loss_curves.items():
         n = len(s)
@@ -176,7 +176,7 @@ def main():
         print(f"  loss [{mod}]: {n} points, range {rng}")
 
     # Load eval metrics
-    eval_metrics: dict[str, dict[int, dict | None]] = {m: {} for m in ("text", "panel", "vision")}
+    eval_metrics: dict[str, dict[int, dict | None]] = {m: {} for m in ("text", "panel", "textpanel")}
     for mod in eval_metrics:
         for step in STEPS:
             eval_metrics[mod][step] = _eval_metrics(mod, step)
@@ -190,7 +190,7 @@ def main():
     ax = axes[0, 0]
     text_steps, text_losses = loss_curves["text"]
     panel_steps, panel_losses = loss_curves["panel"]
-    vision_steps, vision_losses = loss_curves["vision"]
+    vision_steps, vision_losses = loss_curves["textpanel"]
 
     # Text loss is on a different scale (~0.2) than VL (~2). Use a twin-y.
     ax2 = ax.twinx()
@@ -202,7 +202,7 @@ def main():
                  color=COLOR["panel"], label="panel (right axis)")
     if vision_steps:
         ax2.plot(vision_steps, vision_losses, linewidth=2.0, alpha=0.9,
-                 color=COLOR["vision"], label="vision (right axis)")
+                 color=COLOR["textpanel"], label="vision (right axis)")
     ax.set_xlabel("SFT Step", fontsize=labelsize)
     ax.set_ylabel("text loss", fontsize=labelsize, color=COLOR["text"])
     ax2.set_ylabel("VL loss (panel + vision)", fontsize=labelsize)
@@ -222,7 +222,7 @@ def main():
 
     # Helper: plot one metric across modalities with available data
     def plot_metric(ax, key, label, ylim=None, scale=100, show_legend=True):
-        for mod in ("text", "panel", "vision"):
+        for mod in ("text", "panel", "textpanel"):
             xs, ys = [], []
             for s in STEPS:
                 m = eval_metrics[mod][s]
