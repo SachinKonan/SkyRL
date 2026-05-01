@@ -101,8 +101,34 @@ from compare_evals import aggregate, parse_row  # type: ignore
 
 
 def _eval_metrics(modality: str, step: int) -> dict | None:
-    """Glob the per-chunk eval JSONLs that match ``v3_<modality>_step<step>``
-    and aggregate. Returns None if no chunks exist yet."""
+    """Read v3 single-step eval (preferred) or fall back to v2-format chunks.
+
+    New format: ``v3_eval_<modality>_step<step>/summary.json + results.jsonl``
+    written by ``eval_v3_single_step.py``. Single-shot, no tools, v3 SYSTEM.
+
+    Old format (pre-fix): ``v3_<modality>_step<step>_chunk*/exports/...iclr_arxiv*.jsonl``
+    chunked v2-style eval; left here as a fallback for partial data.
+    """
+    # New v3 single-step path
+    new_dir = os.path.join(CKPT_ROOT, f"v3_eval_{modality}_step{step}")
+    new_summary = os.path.join(new_dir, "summary.json")
+    if os.path.exists(new_summary):
+        s = json.load(open(new_summary))
+        # Compute pred_accept from pred_dist for plot consistency
+        pd = s.get("pred_dist", {})
+        n = s.get("n", 0) or 1
+        return {
+            "n": s["n"],
+            "accuracy": s["accuracy"],
+            "boxed_rate": s["boxed_rate"],
+            "pred_accept": pd.get("Accept", 0) / n,
+            "pred_reject": pd.get("Reject", 0) / n,
+            "pred_none": pd.get("(none)", 0) / n,
+            "_chunks": 1,
+            "_source": "v3_single_step",
+        }
+
+    # Fallback: old v2-format chunked
     pat = os.path.join(
         CKPT_ROOT,
         f"v3_{modality}_step{step}_chunk*",
@@ -120,6 +146,7 @@ def _eval_metrics(modality: str, step: int) -> dict | None:
         return None
     out = aggregate(rows)
     out["_chunks"] = len(files)
+    out["_source"] = "v2_chunks"
     return out
 
 
