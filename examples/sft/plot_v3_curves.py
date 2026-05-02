@@ -252,13 +252,26 @@ def main():
         ylim=(0, 100),
     )
 
-    # --- (1,1) Predict-Accept fraction ---
-    plot_metric(
-        axes[1, 1], "pred_accept",
-        {"title": "Verdict Distribution: predict Accept", "y": "percent (%)"},
-        ylim=(0, 100),
-    )
-    axes[1, 1].axhline(50, linestyle=":", color="black", alpha=0.4)
+    # --- (1,1) Predict-Accept (solid) + Predict-Reject (dashed) ---
+    # The dashed lines visualize Reject-bias growth across steps.
+    ax = axes[1, 1]
+    for mod in ("text", "panel", "textpanel"):
+        xs_a, ys_a, xs_r, ys_r = [], [], [], []
+        for s in STEPS:
+            m = eval_metrics[mod][s]
+            if m is not None:
+                xs_a.append(s); ys_a.append(m["pred_accept"] * 100)
+                xs_r.append(s); ys_r.append(m["pred_reject"] * 100)
+        if xs_a:
+            ax.plot(xs_a, ys_a, linewidth=2.5, marker=MARKER[mod], markersize=9,
+                    alpha=0.9, color=COLOR[mod], label=f"{mod} pred Accept")
+            ax.plot(xs_r, ys_r, linewidth=2.0, marker=MARKER[mod], markersize=7,
+                    alpha=0.6, color=COLOR[mod], linestyle="--",
+                    label=f"{mod} pred Reject")
+    stylize(ax, "Verdict Distribution: pred Accept (solid) / pred Reject (dashed)",
+            "percent (%)", ylim=(0, 100))
+    ax.axhline(50, linestyle=":", color="black", alpha=0.4)
+    ax.legend(fontsize=legendsize - 3, loc="center right", ncol=2)
 
     plt.tight_layout()
     out_dir = os.path.join(os.path.dirname(__file__), "artifacts")
