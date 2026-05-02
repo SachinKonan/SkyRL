@@ -40,19 +40,22 @@ legendsize = 13
 ticksize = 13
 
 CKPT_ROOT = "/scratch/gpfs/ZHUANGL/sk7524/ckpts"
-LF_PANEL_CKPT = os.path.join(CKPT_ROOT, "codex_v3_panel")
-LF_VISION_CKPT = os.path.join(CKPT_ROOT, "codex_v3_vision")
+LF_PANEL_GB_CKPT = os.path.join(CKPT_ROOT, "codex_v3_panel_gb")
+LF_VISION_GB_CKPT = os.path.join(CKPT_ROOT, "codex_v3_vision_gb")
 TEXT_LOG_GLOB = "logs/sft/v3_text_7551285_*.err"   # skyrl loss lines
 
 STEPS = [50, 100, 150, 200]
 
+# Three lines: text (base), panel_gb (gestalt-balanced), textpanel_gb.
+MODS = ("text", "panel_gb", "textpanel_gb")
+
 # --- color per modality (consistent across all 4 subplots) -------------------
 COLOR = {
-    "text":   "#6098FF",   # blue
-    "panel":  "#FF8988",   # red
-    "textpanel": "#77B25D",   # green
+    "text":         "#6098FF",   # blue
+    "panel_gb":     "#FF8988",   # red
+    "textpanel_gb": "#77B25D",   # green
 }
-MARKER = {"text": "o", "panel": "s", "textpanel": "D"}
+MARKER = {"text": "o", "panel_gb": "s", "textpanel_gb": "D"}
 
 
 # ---------------------------------------------------------------------------
@@ -78,8 +81,9 @@ def _lf_loss_curve(ckpt_dir: str):
     """LLaMA-Factory writes log_history with step/loss to trainer_state.json."""
     p = os.path.join(ckpt_dir, "trainer_state.json")
     if not os.path.exists(p):
-        # try to find the latest checkpoint-N/trainer_state.json
-        cands = sorted(glob.glob(os.path.join(ckpt_dir, "checkpoint-*", "trainer_state.json")))
+        # try to find the latest checkpoint-N/trainer_state.json (sort by int step)
+        cands = glob.glob(os.path.join(ckpt_dir, "checkpoint-*", "trainer_state.json"))
+        cands.sort(key=lambda x: int(re.search(r"checkpoint-(\d+)", x).group(1)))
         if cands:
             p = cands[-1]
         else:
@@ -101,15 +105,9 @@ from compare_evals import aggregate, parse_row  # type: ignore
 
 
 def _eval_metrics(modality: str, step: int) -> dict | None:
-    """Read v3 single-step eval (preferred) or fall back to v2-format chunks.
-
-    New format: ``v3_eval_<modality>_step<step>/summary.json + results.jsonl``
-    written by ``eval_v3_single_step.py``. Single-shot, no tools, v3 SYSTEM.
-
-    Old format (pre-fix): ``v3_<modality>_step<step>_chunk*/exports/...iclr_arxiv*.jsonl``
-    chunked v2-style eval; left here as a fallback for partial data.
+    """Read v3 single-step eval. Modality string forms the dir name directly,
+    e.g. ``panel_gb`` → ``v3_eval_panel_gb_step<step>/summary.json``.
     """
-    # New v3 single-step path
     new_dir = os.path.join(CKPT_ROOT, f"v3_eval_{modality}_step{step}")
     new_summary = os.path.join(new_dir, "summary.json")
     if os.path.exists(new_summary):
@@ -128,26 +126,7 @@ def _eval_metrics(modality: str, step: int) -> dict | None:
             "_source": "v3_single_step",
         }
 
-    # Fallback: old v2-format chunked
-    pat = os.path.join(
-        CKPT_ROOT,
-        f"v3_{modality}_step{step}_chunk*",
-        "exports", "dumped_evals", "eval_only", "iclr_arxiv*.jsonl",
-    )
-    files = glob.glob(pat)
-    rows = []
-    for fp in files:
-        with open(fp) as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    rows.append(parse_row(json.loads(line)))
-    if not rows:
-        return None
-    out = aggregate(rows)
-    out["_chunks"] = len(files)
-    out["_source"] = "v2_chunks"
-    return out
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -166,9 +145,9 @@ def stylize(ax, title, ylabel, ylim=None):
 def main():
     # Load training-loss curves
     loss_curves = {
-        "text":   _text_loss_curve(),
-        "panel":  _lf_loss_curve(LF_PANEL_CKPT),
-        "textpanel": _lf_loss_curve(LF_VISION_CKPT),
+        "text":         _text_loss_curve(),
+        "panel_gb":     _lf_loss_curve(LF_PANEL_GB_CKPT),
+        "textpanel_gb": _lf_loss_curve(LF_VISION_GB_CKPT),
     }
     for mod, (s, l) in loss_curves.items():
         n = len(s)
@@ -176,7 +155,7 @@ def main():
         print(f"  loss [{mod}]: {n} points, range {rng}")
 
     # Load eval metrics
-    eval_metrics: dict[str, dict[int, dict | None]] = {m: {} for m in ("text", "panel", "textpanel")}
+    eval_metrics: dict[str, dict[int, dict | None]] = {m: {} for m in MODS}
     for mod in eval_metrics:
         for step in STEPS:
             eval_metrics[mod][step] = _eval_metrics(mod, step)
@@ -186,11 +165,11 @@ def main():
 
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
 
-    # --- (0,0) Training loss --- one line per modality (right axis: text shares y axis)
+    # --- (0,0) Training loss --- text on left axis, VL (_gb) on right axis
     ax = axes[0, 0]
     text_steps, text_losses = loss_curves["text"]
-    panel_steps, panel_losses = loss_curves["panel"]
-    vision_steps, vision_losses = loss_curves["textpanel"]
+    panel_steps, panel_losses = loss_curves["panel_gb"]
+    vision_steps, vision_losses = loss_curves["textpanel_gb"]
 
     # Text loss is on a different scale (~0.2) than VL (~2). Use a twin-y.
     ax2 = ax.twinx()
@@ -199,13 +178,13 @@ def main():
                 color=COLOR["text"], label="text (left axis)")
     if panel_steps:
         ax2.plot(panel_steps, panel_losses, linewidth=2.0, alpha=0.9,
-                 color=COLOR["panel"], label="panel (right axis)")
+                 color=COLOR["panel_gb"], label="panel_gb (right axis)")
     if vision_steps:
         ax2.plot(vision_steps, vision_losses, linewidth=2.0, alpha=0.9,
-                 color=COLOR["textpanel"], label="vision (right axis)")
+                 color=COLOR["textpanel_gb"], label="textpanel_gb (right axis)")
     ax.set_xlabel("SFT Step", fontsize=labelsize)
     ax.set_ylabel("text loss", fontsize=labelsize, color=COLOR["text"])
-    ax2.set_ylabel("VL loss (panel + vision)", fontsize=labelsize)
+    ax2.set_ylabel("VL loss (panel_gb + textpanel_gb)", fontsize=labelsize)
     ax.set_title("Training Loss", fontsize=titlesize)
     ax.tick_params(axis="y", labelcolor=COLOR["text"], labelsize=ticksize)
     ax2.tick_params(axis="y", labelsize=ticksize)
@@ -222,7 +201,7 @@ def main():
 
     # Helper: plot one metric across modalities with available data
     def plot_metric(ax, key, label, ylim=None, scale=100, show_legend=True):
-        for mod in ("text", "panel", "textpanel"):
+        for mod in MODS:
             xs, ys = [], []
             for s in STEPS:
                 m = eval_metrics[mod][s]
@@ -255,7 +234,7 @@ def main():
     # --- (1,1) Predict-Accept (solid) + Predict-Reject (dashed) ---
     # The dashed lines visualize Reject-bias growth across steps.
     ax = axes[1, 1]
-    for mod in ("text", "panel", "textpanel"):
+    for mod in MODS:
         xs_a, ys_a, xs_r, ys_r = [], [], [], []
         for s in STEPS:
             m = eval_metrics[mod][s]
